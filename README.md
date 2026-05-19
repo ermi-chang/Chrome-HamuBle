@@ -1,12 +1,8 @@
 # HamuBle
 
-碧蓝幻想（GBF）救援多人房间 过滤 / 显示 Chrome 扩展。
-
-> 非官方粉丝自制工具，与 Cygames 及《碧蓝幻想》运营方无任何关系，亦未获授权或认可。
+Granblue Fantasy 救援 扩展
 
 ## 📖 文档 / 使用手册
-
-完整的安装方法、使用说明、常见问题与**使用条款**请见：
 
 https://ermi-chang.github.io/HamuBle-docs/
 
