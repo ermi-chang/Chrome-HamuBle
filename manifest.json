@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "HamuBle",
+  "version": "1.0.0",
+  "description": "HamuBle - GBF 救援マルチ フィルター",
+  "minimum_chrome_version": "116",
+  "permissions": ["tabs", "scripting", "sidePanel", "storage", "webRequest"],
+  "host_permissions": [
+    "https://game.granbluefantasy.jp/*",
+    "https://prd-game-a-granbluefantasy.akamaized.net/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "HamuBle（クリックでURLを記憶）",
+    "default_icon": { "48": "iconm1.png", "128": "iconm1.png" }
+  },
+  "side_panel": { "default_path": "sidepanel.html" },
+  "content_scripts": [
+    {
+      "matches": ["https://game.granbluefantasy.jp/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": { "48": "iconm1.png", "128": "iconm1.png" }
+}
