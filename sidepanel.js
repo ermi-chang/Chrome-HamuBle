@@ -1113,8 +1113,19 @@ function syncHellLimitedAcrossSiblings(questId) {
     if (getHellDataidKey(qid) !== key) continue;
     const sib = questMeta[qid];
     if (!sib || !sib.isHellQuest) continue;
-    if (Number.isFinite(limited)) sib.limitedCount    = limited;
-    if (Number.isFinite(max))     sib.maxLimitedCount = max;
+    // 共有プール前提なので「より少なく観測された側が真値」として min 採用。
+    // migrateHellSharedLimited（起動時）と同じ保守的選択でランタイム伝播も揃える。
+    // 兄弟側が未観測 (非有限) なら src 側を初期値として採用。
+    if (Number.isFinite(limited)) {
+      sib.limitedCount = Number.isFinite(sib.limitedCount)
+        ? Math.min(sib.limitedCount, limited)
+        : limited;
+    }
+    if (Number.isFinite(max)) {
+      sib.maxLimitedCount = Number.isFinite(sib.maxLimitedCount)
+        ? Math.min(sib.maxLimitedCount, max)
+        : max;
+    }
   }
 }
 
