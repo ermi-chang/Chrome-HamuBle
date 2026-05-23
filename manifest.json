@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "HamuBle",
-  "version": "1.0.0",
-  "description": "HamuBle - GBF 救援マルチ フィルター",
+  "version": "1.1.0",
+  "description": "HamuBle",
   "minimum_chrome_version": "116",
   "permissions": ["tabs", "scripting", "sidePanel", "storage", "webRequest"],
   "host_permissions": [

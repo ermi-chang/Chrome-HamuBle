@@ -5,6 +5,8 @@
   if (window.__gbfRaidFilterContentInitialized) return;
   window.__gbfRaidFilterContentInitialized = true;
 
+  console.log('[hamuble] content.js loaded', location.href);
+
   // ── Extension context validity ────────────────────
   function isContextValid() {
     try { return !!chrome.runtime?.id; } catch (_) { return false; }
@@ -54,6 +56,13 @@
   // { questId, chapterName, eventPeriodEndMs?, hostThumbnailSrc?, ts }
   let activeHellPopup = null;
 
+  // [V2 GBF DOM] hell カテゴリ選択 (.btn-stage-detail.select-hell) → レベル選択 (.btn-select-hell) の
+  // 2 段階で hell が確定するため、カテゴリ選択時の data-id/data-group/data-title をここに一時保持する。
+  // レベル選択クリック時に消費して activeHellPopup へ繋ぐ。
+  // { dataId, dataGroup, title, ts }
+  let activeHellCategoryV2 = null;
+  const ACTIVE_HELL_CATEGORY_V2_TTL = 120_000;
+
   // Hell PT選択画面 (#quest/supporter) OK 確定までの保留状態。
   // .pop-start-hell の OK 押下時にスナップショットを取り、
   // supporter 画面の .btn-usual-ok + hashchange 離脱で確定発火する。
@@ -88,6 +97,7 @@
 
   function fireHellQuestConsumed() {
     if (!pendingHellHost) return;
+    console.log('[hamuble:hell] fireHellQuestConsumed', { questId: pendingHellHost.questId, skipOn: pendingHellHost.skipOn, skipNum: pendingHellHost.skipNum });
     const { before, skipNum } = pendingHellHost;
     const after = Number.isFinite(before) ? Math.max(0, before - skipNum) : null;
     chrome.runtime.sendMessage({
@@ -538,7 +548,10 @@
     return byId.size > 0 ? [...byId.values()] : null;
   }
 
-  // ── イベントタブ Hell リストからの残数抽出 ─────────────
+  // ── [LEGACY DOM] イベントタブ Hell リストからの残数抽出 ─────────────
+  // 旧 GBF DOM の .btn-stage-detail.ex-hell を対象とする実装。現在の GBF DOM では結果 0 件で無害。
+  // DOM 改変の法則性比較サンプル、また将来 ex-hell 構造が復活した場合のために残す。
+  // 新 DOM 対応は別フェーズで extractEventTabHellMetaV2 等として追加予定。
   // extra ページの「イベント」タブ (#cnt-event-quest.active) 内の
   // 各 Hell エントリ (.btn-stage-detail.ex-hell) について、
   // 兄弟要素 .prt-remain-count .txt-count を真値として取得する。
@@ -731,7 +744,10 @@
     setTimeout(tryExtract, 1500);
   }, true);
 
-  // ── Hell ボタン (.btn-stage-detail.ex-hell) クリック検知 ───────
+  // ── [LEGACY DOM] Hell ボタン (.btn-stage-detail.ex-hell) クリック検知 ───────
+  // 旧 GBF DOM 用。現在の GBF では .ex-hell クラスが消えておりマッチしない。
+  // 新 DOM 対応は下方の「[V2 GBF DOM] hell カテゴリ選択 / レベル選択」ハンドラを参照。
+  // DOM 改変の法則性比較サンプルとして残す。
   // 残数の取得は extra event タブ表示時 (extractEventTabHellMeta) に行うため、
   // ここでは Hell コンテキスト（questId / title / サムネ）を保持するだけ。
   // skip popup OK 押下時に pendingHellHost へ昇格する入口。
@@ -758,9 +774,12 @@
       eventPeriodEndMs,
       ts: Date.now(),
     };
+    console.log('[hamuble:hell] ex-hell click → activeHellPopup', activeHellPopup);
   }, true);
 
-  // ── Hell skip 選択ポップアップ OK (.pop-start-hell .btn-usual-ok) ──
+  // ── [LEGACY DOM] Hell skip 選択ポップアップ OK (.pop-start-hell .btn-usual-ok) ──
+  // 旧 GBF DOM 用。現在の GBF では .pop-start-hell クラスは無く .prt-start-event-hell 構造になった。
+  // 新 DOM 対応は下方の「[V2 GBF DOM] hell skip popup OK」ハンドラを参照。
   // 即時消費せず pendingHellHost にスナップショット保存。
   // PT選択 (#quest/supporter) OK + hashchange 離脱で確定する。
   // txt-skip-count の値は consume 計算上の `before` として保持。
@@ -797,6 +816,136 @@
       observedMaxSkip,
       ts:               Date.now(),
     };
+    console.log('[hamuble:hell] pop-start-hell OK → pendingHellHost', { skipOn, skipNum, pendingHellHost });
+    activeHellPopup = null;
+  }, true);
+
+  // ── [V2 GBF DOM] hell カテゴリ選択 (.btn-stage-detail.select-hell) クリック検知 ──
+  // 新 DOM では hell 自発が「カテゴリ選択 (.select-hell) → レベル選択 (.btn-select-hell) → skip popup OK」の 3 段階。
+  // ここではカテゴリ選択時の data-id/data-group/data-title を一時保持し、レベル選択時に消費して
+  // 旧形式 questId `hell_<id>_<group>` を合成する。
+  document.addEventListener('click', (e) => {
+    if (!isContextValid()) return;
+    const catBtn = e.target.closest('.btn-stage-detail.select-hell');
+    if (!catBtn) return;
+
+    const dataId    = catBtn.dataset.id    || '';
+    const dataGroup = catBtn.dataset.group || '';
+    const title     = catBtn.dataset.title || '';
+    if (!dataId) return;
+
+    activeHellCategoryV2 = { dataId, dataGroup, title, ts: Date.now() };
+    console.log('[hamuble:hell] V2 category select → activeHellCategoryV2', activeHellCategoryV2);
+  }, true);
+
+  // ── [V2 GBF DOM] hell レベル選択 (.btn-select-hell) クリック検知 ──
+  // 直前にカテゴリ選択 (activeHellCategoryV2) が立っていれば、それを消費して activeHellPopup を立てる。
+  // questId は旧形式 makeHellQuestId(dataId, dataGroup) を維持（マイクエスト履歴の互換性）。
+  // セレクタは .ico-clear を含めず .btn-select-hell 単体で受ける（.ico-clear はクリア済みマーカー、
+  // 未クリア hell には付かない）。誤検知防止のため data-quest-id の有無で hell レベル選択を識別。
+  // .btn-select-hell は [data-quest-id][data-chapter-name] を持つため通常自発検知ハンドラにも
+  // 同時に拾われる。pendingHost = null で通常経路の暴発を防ぐ。
+  // GBF は popup 内 .btn-select-hell でネイティブ click イベントを発火しない（pointerdown ベースの独自処理）。
+  // そのため click と pointerdown 両方で listen する。dedup は activeHellCategoryV2 のクリアで自然に成立。
+  const handleV2LevelSelect = (e) => {
+    if (!isContextValid()) return;
+    const levelBtn = e.target.closest('.btn-select-hell');
+    if (!levelBtn) return;
+
+    // ハンドラに届いた事実 + 状態を診断ログで可視化（早期 return の切り分け用）
+    console.log('[hamuble:hell] V2 level click detected', {
+      eventType: e.type,
+      className: levelBtn.className,
+      questId: levelBtn.dataset.questId,
+      chapterName: levelBtn.dataset.chapterName,
+      hasActiveCategoryV2: !!activeHellCategoryV2,
+      categoryV2Age: activeHellCategoryV2 ? (Date.now() - activeHellCategoryV2.ts) : null,
+    });
+
+    if (!levelBtn.dataset.questId) {
+      console.log('[hamuble:hell] V2 level click skipped: no data-quest-id');
+      return;
+    }
+    if (!activeHellCategoryV2) {
+      console.log('[hamuble:hell] V2 level click skipped: no activeHellCategoryV2');
+      return;
+    }
+    if (Date.now() - activeHellCategoryV2.ts > ACTIVE_HELL_CATEGORY_V2_TTL) {
+      console.log('[hamuble:hell] V2 level click skipped: TTL expired');
+      activeHellCategoryV2 = null;
+      return;
+    }
+
+    // [V2] レベル別カードを実現するため questId にレベル識別子 (data-quest-id) を加える。
+    // 旧形式 `hell_<id>_<group>` ではカテゴリ単位でしか区別できず、Lv60/Lv90 が同じカードに集約されてしまうため。
+    const questIdNumeric = levelBtn.dataset.questId;
+    const questId = `hell_${activeHellCategoryV2.dataId}_${activeHellCategoryV2.dataGroup}_${questIdNumeric}`;
+    // chapterName はカテゴリ名 + レベル名を結合して識別性を高める。
+    // 例: 「不滅に囚われし者 Lv60 新型錬金生物」
+    const levelName = levelBtn.dataset.chapterName || '';
+    const chapterName = [activeHellCategoryV2.title, levelName].filter(Boolean).join(' ').trim();
+    const eventPeriodEndMs =
+      isEventAdventHash(location.hash || '') ? extractEventAdventPeriodEndMs() : null;
+
+    // 通常自発の保留があれば破棄して Hell フローに切替（.btn-select-hell が通常経路にも拾われるため）
+    pendingHost = null;
+
+    activeHellPopup = {
+      questId,
+      chapterName,
+      hostThumbnailSrc: '', // skip popup の .img-hell-boss から OK 時に取得
+      eventPeriodEndMs,
+      ts: Date.now(),
+      v2: true,
+    };
+    console.log('[hamuble:hell] V2 level select → activeHellPopup', activeHellPopup);
+    activeHellCategoryV2 = null;
+  };
+  document.addEventListener('click', handleV2LevelSelect, true);
+  document.addEventListener('pointerdown', handleV2LevelSelect, true);
+
+  // ── [V2 GBF DOM] hell skip 設定 popup OK (#pop > .prt-popup-footer > .btn-usual-ok) ──
+  // 識別キー: 親 #pop 内に .prt-start-event-hell があれば skip 設定 popup の OK と判定。
+  // 内側の #hell-skip-setting / #skip-num-count / .txt-skip-count は旧 DOM と同じセレクタを使用。
+  // pendingHellHost に昇格すれば後続の supporter OK / HELL_SKIP_RE 経路は既存ロジックがそのまま動く。
+  document.addEventListener('click', (e) => {
+    if (!isContextValid()) return;
+    const okBtn = e.target.closest('.btn-usual-ok');
+    if (!okBtn) return;
+    const popContainer = okBtn.closest('#pop');
+    if (!popContainer) return;
+    const hellPopupBody = popContainer.querySelector('.prt-start-event-hell');
+    if (!hellPopupBody) return;
+    if (!activeHellPopup) return;
+
+    const skipCheckbox   = popContainer.querySelector('#hell-skip-setting');
+    const skipNumSelect  = popContainer.querySelector('#skip-num-count');
+    const txtSkipCountEl = popContainer.querySelector('.txt-skip-count');
+
+    const before  = parseInt(txtSkipCountEl?.textContent?.trim() || '', 10);
+    const skipOn  = !!(skipCheckbox && skipCheckbox.checked);
+    const skipNum = skipOn ? (parseInt(skipNumSelect?.value || '1', 10) || 1) : 1;
+    const skipNumOptions = skipNumSelect?.querySelectorAll('option') || [];
+    const observedMaxSkip = skipNumOptions.length > 0 ? skipNumOptions.length : null;
+
+    // skip popup 内の boss 画像をサムネとして採取
+    const hellBossSrc = hellPopupBody.querySelector('.img-hell-boss')?.getAttribute('src') || '';
+    const hostThumbnailSrc = hellBossSrc || activeHellPopup.hostThumbnailSrc || '';
+
+    pendingHost = null;
+
+    pendingHellHost = {
+      questId:          activeHellPopup.questId,
+      chapterName:      activeHellPopup.chapterName,
+      hostThumbnailSrc,
+      eventPeriodEndMs: activeHellPopup.eventPeriodEndMs,
+      before:           Number.isFinite(before) ? before : null,
+      skipNum,
+      skipOn,
+      observedMaxSkip,
+      ts:               Date.now(),
+    };
+    console.log('[hamuble:hell] V2 skip popup OK → pendingHellHost', { skipOn, skipNum, pendingHellHost });
     activeHellPopup = null;
   }, true);
 
@@ -825,7 +974,10 @@
   // 中間ポップアップ（四象ボーナス通知等）のOKで誤爆しないようにするため。
   // Hell 経路 (pendingHellHost) と通常 (pendingHost) の両方をハンドル。
   // Hell skip ON 時は str_params URL (HELL_SKIP_RE) もサポート石選択画面なので許容。
-  document.addEventListener('click', (e) => {
+  // GBF は popup 内 .btn-usual-ok でネイティブ click を発火しないケースがあるため、
+  // click + pointerdown 両方で listen する。okClickedAt は最新時刻で上書きされるだけなので
+  // 重複発火しても問題なし。
+  const handleSupporterOkClick = (e) => {
     if (!isContextValid()) return;
     const okEl = e.target.closest('.btn-usual-ok');
     if (!okEl) return;
@@ -844,6 +996,7 @@
     if (isPendingHellHostValid()) {
       if (src) pendingHellHost.hostThumbnailSrc = src;
       pendingHellHost.okClickedAt = Date.now();
+      console.log('[hamuble:hell] supporter btn-usual-ok → okClickedAt set', { eventType: e.type, questId: pendingHellHost.questId });
       return;
     }
     // str_params URL は Hell 専用なので、pendingHellHost が無ければ通常経路に流さない
@@ -851,7 +1004,10 @@
     if (!isPendingHostValid()) return;
     if (src) pendingHost.hostThumbnailSrc = src;
     pendingHost.okClickedAt = Date.now();
-  }, true);
+  };
+  document.addEventListener('click', handleSupporterOkClick, true);
+  document.addEventListener('pointerdown', handleSupporterOkClick, true);
+  document.addEventListener('pointerup', handleSupporterOkClick, true);
 
   // ── 自発クリック検知（quest系DOMをquest名属性で絞って統一）────────
   // data-quest-id だけで closest するとサポート石選択画面の btn-usual-ok 等にも
@@ -996,8 +1152,14 @@
           questType:       params.quest_type || '',
           backLink:        params.back_link || 'quest!extra!event',
           observedMaxSkip: pendingHellHost.observedMaxSkip ?? null,
+          isNewSkip:       params.is_new_skip || '',
         };
       }
+      // skip ON / OFF 問わず、str_params URL 到達後にサポート選択画面が表示され、
+      // ユーザーがサポート OK を押すまで実際の消費は確定しない。
+      // よってここでは hellSkipParams 採取のみ行い、消費発火は通常通り
+      // handleSupporterOkClick で okClickedAt セット → hashchange で leftSupporterArea
+      // 判定 → fireHellQuestConsumed のフローに任せる。
     } else if (HELL_SKIP_RE.test(hash) && isLastFiredHellValid()) {
       // Retry 経路: 直前消費の hell snapshot から pendingHellHost を再構築。
       // skipNum は URL の skip_count パラメータが真値（Retry 中は変更不可）。
@@ -1014,6 +1176,7 @@
             questType:       params.quest_type || lastFiredHell.hellSkipParams?.questType || '',
             backLink:        params.back_link || lastFiredHell.hellSkipParams?.backLink || 'quest!extra!event',
             observedMaxSkip: lastFiredHell.hellSkipParams?.observedMaxSkip ?? null,
+            isNewSkip:       params.is_new_skip || lastFiredHell.hellSkipParams?.isNewSkip || '',
           },
           before:  null, // 現値不明 → sidepanel 側で consumedCount 経路の減算を取らせる
           skipNum,
@@ -1028,6 +1191,30 @@
       }
     }
 
+    // Hell 通常自発（skip ポップアップ未使用）の検出:
+    // .btn-stage-detail.ex-hell クリック時に activeHellPopup がセット済み (content.js Hell ボタン検知)。
+    // skip ポップアップが出ない hell（skip 未解放等）はサポート石選択画面に直遷移するため、
+    // ここで activeHellPopup を pendingHellHost に昇格させ、後続の Support OK + 離脱で
+    // HELL_QUEST_CONSUMED を発火させる。skip ON 経路は HELL_SKIP_RE URL 到達時の既存処理が拾うため、
+    // SELF_HOST_RE 到達かつ pendingHellHost 未設定の場合のみ昇格する。
+    if (hostMatch && !isPendingHellHostValid() && activeHellPopup
+        && (Date.now() - activeHellPopup.ts) < PENDING_HELL_TTL) {
+      pendingHost = null;
+      pendingHellHost = {
+        questId:          activeHellPopup.questId,
+        chapterName:      activeHellPopup.chapterName,
+        hostThumbnailSrc: activeHellPopup.hostThumbnailSrc,
+        eventPeriodEndMs: activeHellPopup.eventPeriodEndMs,
+        before:           null,
+        skipNum:          1,
+        skipOn:           false,
+        observedMaxSkip:  null,
+        ts:               Date.now(),
+      };
+      console.log('[hamuble:hell] SELF_HOST_RE reached → promote activeHellPopup to pendingHellHost', pendingHellHost.questId);
+      activeHellPopup = null;
+    }
+
     // Hell 確定: サポート石選択 OK 押下後に supporter / str_params から離脱したタイミング
     // str_params URL (HELL_SKIP_RE) もサポート石選択画面なので、そこからの離脱も対象。
     const leftSupporterArea = !hostMatch && !HELL_SKIP_RE.test(hash);
@@ -1039,6 +1226,7 @@
       // pendingHellHost を残すと次の通常 quest の OK click が hijack され、
       // SELF_HOST_DETECTED が抑止 + 古い hell の HELL_QUEST_CONSUMED が誤発火する。
       // okClickedAt 未設定で supporter 圏外に出たら確実にクリア。
+      console.log('[hamuble:hell] abort clear pendingHellHost (leftSupporterArea without okClickedAt)', { questId: pendingHellHost.questId, hash });
       pendingHellHost = null;
     } else if (isPendingHellHostValid()) {
       // Hell 保留中は通常 pendingHost の hash 由来セットアップを抑止。

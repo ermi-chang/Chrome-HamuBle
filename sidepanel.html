@@ -19,6 +19,9 @@
       --cat-event: #f4c430;
       --cat-pro:   #c8a8e0;
       --cat-etc:   #7a8593;
+      --r: 12px;
+      --r-sm: 8px;
+      --r-pill: 14px;
     }
     html, body { width: 100%; height: 100%; overflow: hidden; }
     body {
@@ -41,7 +44,7 @@
     .icon-btn {
       width: 32px; height: 32px;
       display: flex; align-items: center; justify-content: center;
-      border-radius: 6px; border: 1px solid transparent;
+      border-radius: var(--r-sm); border: 1px solid transparent;
       cursor: pointer; background: none; padding: 0;
       color: var(--tx2); transition: all .15s;
     }
@@ -158,7 +161,7 @@
     .pill-group { display: flex; gap: 4px; }
     .pill {
       background: var(--bg2); border: 1px solid var(--bdr2); color: var(--tx1);
-      border-radius: 4px; padding: 3px 8px; font-size: 11px; cursor: pointer;
+      border-radius: var(--r-sm); padding: 3px 8px; font-size: 11px; cursor: pointer;
       transition: background .12s, color .12s, border-color .12s;
     }
     .pill:hover { border-color: var(--acc); color: var(--acc); }
@@ -166,19 +169,30 @@
 
     /* ── Filters ── */
     .filters { padding: 8px 10px; background: var(--bg1); border-bottom: 1px solid var(--bdr); flex-shrink: 0; }
-    .filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
-    .filter-block { background: var(--bg2); border: 1px solid var(--bdr); border-radius: 6px; padding: 7px 8px; transition: border-color .15s; }
+    .filter-grid { display: flex; flex-direction: column; gap: 7px; }
+    .filter-block {
+      background: var(--bg2); border: 1px solid var(--bdr); border-radius: var(--r);
+      padding: 7px 8px; transition: border-color .15s;
+      display: flex; align-items: center; gap: 6px;
+      min-width: 0;
+    }
     .filter-block.active-filter { border-color: var(--acc); }
-    .filter-block-header { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
     .filter-check { width: 15px; height: 15px; cursor: pointer; accent-color: var(--acc); flex-shrink: 0; }
-    .filter-block-title { font-size: 12px; font-weight: 600; color: var(--tx0); cursor: pointer; }
+    .filter-block-title { font-size: 12px; font-weight: 600; color: var(--tx0); cursor: pointer; flex-shrink: 0; min-width: 28px; }
     .filter-block.disabled .filter-block-title { color: var(--tx2); }
-    .filter-inputs { display: flex; align-items: center; gap: 5px; }
-    .filter-inputs select { flex: 1; min-width: 0; background: var(--bg3); border: 1px solid var(--bdr2); color: var(--tx0); border-radius: 4px; padding: 4px 4px; font-size: 11px; cursor: pointer; }
-    .filter-inputs input[type="number"] { width: 44px; text-align: center; background: var(--bg3); border: 1px solid var(--bdr2); color: var(--tx0); border-radius: 4px; padding: 4px 4px; font-size: 13px; font-weight: 600; }
-    .filter-unit { font-size: 11px; color: var(--tx2); flex-shrink: 0; }
+    .filter-block > input[type="range"] { flex: 1; min-width: 0; accent-color: var(--acc); cursor: pointer; height: 18px; padding: 0; margin: 0; }
+    .filter-block > .filter-val-display { font-size: 11px; color: var(--acc); font-weight: 700; flex-shrink: 0; min-width: 36px; text-align: right; }
+    .filter-mode-toggle { display: inline-flex; border: 1px solid var(--bdr2); border-radius: var(--r-sm); overflow: hidden; flex-shrink: 0; }
+    .filter-mode-toggle .mode-btn {
+      background: var(--bg3); color: var(--tx2); border: none;
+      padding: 3px 8px; font-size: 11px; cursor: pointer;
+      transition: background .12s, color .12s;
+    }
+    .filter-mode-toggle .mode-btn:hover:not([aria-pressed="true"]) { color: var(--acc); }
+    .filter-mode-toggle .mode-btn[aria-pressed="true"] { background: var(--acc); color: var(--bg0); font-weight: 700; }
+    .filter-mode-toggle .mode-btn + .mode-btn { border-left: 1px solid var(--bdr2); }
     select:focus, input[type="number"]:focus { outline: none; border-color: var(--acc); }
-    .filter-block.disabled .filter-inputs { opacity: 0.4; pointer-events: none; }
+    .filter-block.disabled > :not(.filter-check):not(.filter-block-title) { opacity: 0.4; pointer-events: none; }
 
     /* ── Template bar ── */
     .template-bar {
@@ -194,14 +208,14 @@
       padding: 0 5px 0 10px;
       flex-wrap: wrap;      /* ← 折り返し */
     }
-    .tpl-chip { display: flex; align-items: center; gap: 0; background: var(--bg2); border: 1px solid var(--bdr2); border-radius: 12px; flex-shrink: 0; overflow: hidden; cursor: pointer; transition: border-color .12s; }
+    .tpl-chip { display: flex; align-items: center; gap: 0; background: var(--bg2); border: 1px solid var(--bdr2); border-radius: var(--r-pill); flex-shrink: 0; overflow: hidden; cursor: pointer; transition: border-color .12s; }
     .tpl-chip:hover { border-color: var(--acc); }
     .tpl-chip.active-tpl { border-color: var(--acc); background: rgba(87,207,220,0.1); }
     .tpl-chip-name { padding: 3px 8px 3px 9px; font-size: 11px; color: var(--tx0); white-space: nowrap; }
     .tpl-chip.active-tpl .tpl-chip-name { color: var(--acc); font-weight: 600; }
     .tpl-chip-del { padding: 3px 6px 3px 2px; font-size: 10px; color: var(--tx2); cursor: pointer; line-height: 1; }
     .tpl-chip-del:hover { color: var(--red); }
-    .btn-tpl-add { background: none; border: 1px dashed var(--bdr2); color: var(--tx2); border-radius: 12px; padding: 3px 10px; font-size: 11px; cursor: pointer; white-space: nowrap; flex-shrink: 0; transition: border-color .12s, color .12s; align-self: flex-start; margin: 1px 0 0; }
+    .btn-tpl-add { background: none; border: 1px dashed var(--bdr2); color: var(--tx2); border-radius: var(--r-pill); padding: 3px 10px; font-size: 11px; cursor: pointer; white-space: nowrap; flex-shrink: 0; transition: border-color .12s, color .12s; align-self: flex-start; margin: 1px 0 0; }
     .btn-tpl-add:hover { border-color: var(--acc); color: var(--acc); }
 
     /* ── BP row bar (FP 対象限定) ── */
@@ -213,7 +227,7 @@
     /* ── Sort row ── */
     .sort-row { display: flex; align-items: center; gap: 8px; padding: 5px 10px; background: var(--bg1); border-bottom: 1px solid var(--bdr); flex-shrink: 0; }
     .sort-row label { font-size: 11px; color: var(--tx2); flex-shrink: 0; }
-    .sort-row select { flex: 1; background: var(--bg2); border: 1px solid var(--bdr2); color: var(--tx0); border-radius: 4px; padding: 4px 6px; font-size: 12px; cursor: pointer; }
+    .sort-row select { flex: 1; background: var(--bg2); border: 1px solid var(--bdr2); color: var(--tx0); border-radius: var(--r-sm); padding: 4px 6px; font-size: 12px; cursor: pointer; }
 
     /* ── Results bar ── */
     .results-bar { display: flex; align-items: center; justify-content: space-between; padding: 4px 10px; background: var(--bg2); border-bottom: 1px solid var(--bdr); flex-shrink: 0; }
@@ -254,7 +268,7 @@
       background: var(--bg2);
       border: 1px solid var(--bdr2);
       color: var(--tx2);
-      border-radius: 12px;
+      border-radius: var(--r-pill);
       cursor: pointer;
       white-space: nowrap;
       font-family: inherit;
@@ -294,31 +308,31 @@
     .cat-chip[data-cat="ul"].active { color: #fff; }
 
     /* ── List ── */
-    .list { overflow-y: auto; flex: 1; }
+    .list { overflow-y: auto; flex: 1; padding: 4px 6px; }
     .list::-webkit-scrollbar { width: 4px; }
     .list::-webkit-scrollbar-track { background: var(--bg0); }
     .list::-webkit-scrollbar-thumb { background: var(--bdr); border-radius: 2px; }
 
-    /* ── Card ── */
-    .card { display: flex; align-items: center; gap: 10px; padding: 12px 10px; border-bottom: 1px solid var(--bg2); cursor: pointer; transition: background .1s; user-select: none; }
-    .card:nth-child(even) { background: #3a4149; }
-    .card:hover { background: #302F40; }
+    /* ── Card (capsule) ── */
+    .card { display: flex; align-items: center; gap: 10px; padding: 12px 10px; margin-bottom: 6px; background: var(--bg1); position: relative; border: 1px solid var(--bdr); border-radius: var(--r); cursor: pointer; transition: background .1s, border-color .12s; user-select: none; }
+    .card:nth-child(even) { background: var(--bg2); }
+    .card:hover { background: #302F40; border-color: var(--bdr2); }
     .card:active { background: #434153; }
     .card.joining { opacity: .5; pointer-events: none; }
-    .card.joined { background: rgba(62,181,3,0.1); }
-    .card-unknown { display: flex; align-items: center; gap: 10px; padding: 12px 10px; border-bottom: 1px solid var(--bg2); cursor: not-allowed; user-select: none; background: rgba(255,77,0,0.08); border-left: 3px solid #ff4d00; opacity: .75; }
-    .thumb { width: 68px; height: 52px; border-radius: 4px; object-fit: cover; flex-shrink: 0; background: var(--bg2); pointer-events: none; }
+    .card.joined { background: rgba(62,181,3,0.1); border-color: var(--grn); }
+    .card-unknown { display: flex; align-items: center; gap: 10px; padding: 12px 10px; margin-bottom: 6px; position: relative; border: 1px solid var(--red); border-radius: var(--r); cursor: not-allowed; user-select: none; background: rgba(255,77,0,0.08); opacity: .75; }
+    .thumb { width: 68px; height: 52px; border-radius: var(--r-sm); object-fit: cover; flex-shrink: 0; background: var(--bg2); pointer-events: none; }
     .info { flex: 1; min-width: 0; pointer-events: none; }
     .name { font-size: 14px; font-weight: 600; color: var(--tx0); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 5px; }
     .meta { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; margin-bottom: 5px; }
     .mi { display: flex; align-items: center; gap: 3px; font-size: 13px; }
     .mk { color: var(--tx2); font-size: 11px; } .mv { color: var(--tx1); font-weight: 600; font-size: 14px; }
     .mv.g { color: var(--grn); } .mv.o { color: var(--org); } .mv.r { color: var(--red); }
-    .hp-bar { height: 4px; background: var(--bdr); border-radius: 2px; overflow: hidden; margin-bottom: 5px; }
-    .hp-fill { height: 100%; border-radius: 2px; }
-    .footer { display: flex; gap: 8px; align-items: center; }
+    .hp-bar { height: 4px; background: var(--bdr); border-radius: 4px; overflow: hidden; margin-bottom: 5px; }
+    .hp-fill { height: 100%; border-radius: 4px; }
+    .footer { display: flex; justify-content: flex-start; align-items: center; }
     .time { font-size: 10px; color: #58a7c0; }
-    .owner { font-size: 10px; color: var(--tx2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px; }
+    .owner { display: none; }
     .bp-row { display: flex; align-items: center; gap: 3px; }
     .bp-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bdr2); }
     .bp-dot.on { background: #4fa3e0; }
@@ -331,7 +345,7 @@
       margin: 4px 6px 8px;
       border: 1px solid var(--bdr);
       border-left: 3px solid var(--cat-event);
-      border-radius: 6px;
+      border-radius: var(--r-sm);
       background: var(--bg1);
     }
     .active-event-row {
@@ -406,7 +420,7 @@
     }
     .host-tile {
       position: relative;
-      border-radius: 6px; overflow: hidden;
+      border-radius: var(--r); overflow: hidden;
       background: var(--bg2); border: 1px solid var(--bdr);
       cursor: pointer; transition: border-color .15s, background .1s;
       user-select: none;
@@ -468,14 +482,14 @@
 
     /* ── Host history delete buttons ── */
     .host-clear-all {
-      background: none; border: 1px solid var(--bdr2); border-radius: 4px;
+      background: none; border: 1px solid var(--bdr2); border-radius: var(--r-sm);
       color: var(--tx2); font-size: 12px; cursor: pointer; padding: 2px 6px;
       transition: color .15s, border-color .15s;
     }
     .host-clear-all:hover { color: var(--red); border-color: var(--red); }
     .host-del {
       position: absolute; top: 2px; right: 2px;
-      background: rgba(26,30,36,0.75); border: none; border-radius: 4px;
+      background: rgba(26,30,36,0.75); border: none; border-radius: var(--r-sm);
       color: var(--tx2); font-size: 12px; line-height: 1;
       cursor: pointer; padding: 2px 4px;
       opacity: 0; transition: opacity .15s, color .15s;
@@ -495,11 +509,11 @@
     /* ── Template name input ── */
     .tpl-name-row { display: none; align-items: center; gap: 5px; padding: 5px 10px; background: var(--bg0); border-bottom: 1px solid var(--acc); flex-shrink: 0; }
     .tpl-name-row.open { display: flex; }
-    .tpl-name-input { flex: 1; background: var(--bg2); border: 1px solid var(--acc); color: var(--tx0); border-radius: 4px; padding: 5px 8px; font-size: 12px; }
+    .tpl-name-input { flex: 1; background: var(--bg2); border: 1px solid var(--acc); color: var(--tx0); border-radius: var(--r-sm); padding: 5px 8px; font-size: 12px; }
     .tpl-name-input:focus { outline: none; }
-    .btn-tpl-save { background: var(--acc); border: none; color: var(--bg0); border-radius: 4px; padding: 5px 10px; font-size: 12px; font-weight: 700; cursor: pointer; flex-shrink: 0; }
+    .btn-tpl-save { background: var(--acc); border: none; color: var(--bg0); border-radius: var(--r-sm); padding: 5px 10px; font-size: 12px; font-weight: 700; cursor: pointer; flex-shrink: 0; }
     .btn-tpl-save:hover { background: var(--acc-d); }
-    .btn-tpl-cancel { background: var(--bg2); border: 1px solid var(--bdr2); color: var(--tx1); border-radius: 4px; padding: 5px 8px; font-size: 12px; cursor: pointer; flex-shrink: 0; }
+    .btn-tpl-cancel { background: var(--bg2); border: 1px solid var(--bdr2); color: var(--tx1); border-radius: var(--r-sm); padding: 5px 8px; font-size: 12px; cursor: pointer; flex-shrink: 0; }
 
     /* ── Info button ── */
     .info-btn {
@@ -553,7 +567,7 @@
     }
 
     /* ── 展開アイテム（使い方・FAQ 共通） ── */
-    .collapsible-list { border: 1px solid var(--bdr); border-radius: 5px; overflow: hidden; margin-bottom: 0; }
+    .collapsible-list { border: 1px solid var(--bdr); border-radius: var(--r-sm); overflow: hidden; margin-bottom: 0; }
     .collapsible-item { border-bottom: 1px solid var(--bdr); }
     .collapsible-item:last-child { border-bottom: none; }
     .collapsible-item summary {
@@ -588,7 +602,7 @@
     .info-link-row { display: flex; gap: 7px; }
     .info-link-btn {
       flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;
-      padding: 6px 8px; border-radius: 5px;
+      padding: 6px 8px; border-radius: var(--r-sm);
       background: var(--bg2); border: 1px solid var(--bdr);
       color: var(--tx0); font-size: 11px; text-decoration: none;
       transition: background .15s;
@@ -704,31 +718,23 @@
 <div class="filters rescue-only">
   <div class="filter-grid">
     <div class="filter-block disabled" id="hp-block">
-      <div class="filter-block-header">
-        <input type="checkbox" class="filter-check" id="hp-on">
-        <label class="filter-block-title" for="hp-on">HP</label>
-      </div>
-      <div class="filter-inputs">
-        <input type="number" id="hp-val" min="0" max="100" value="50">
-        <span class="filter-unit">%</span>
-        <select id="hp-mode">
-          <option value="above" data-i18n="filterAbove">以上</option>
-          <option value="below" data-i18n="filterBelow">以下</option>
-        </select>
+      <input type="checkbox" class="filter-check" id="hp-on">
+      <label class="filter-block-title" for="hp-on">HP</label>
+      <input type="range" id="hp-val" min="20" max="100" step="10" value="50">
+      <span class="filter-val-display"><span id="hp-val-display">50</span>%</span>
+      <div class="filter-mode-toggle" id="hp-mode-toggle" role="group">
+        <button type="button" class="mode-btn" data-mode="above" data-i18n="filterAbove" aria-pressed="true">以上</button>
+        <button type="button" class="mode-btn" data-mode="below" data-i18n="filterBelow" aria-pressed="false">以下</button>
       </div>
     </div>
     <div class="filter-block disabled" id="mem-block">
-      <div class="filter-block-header">
-        <input type="checkbox" class="filter-check" id="mem-on">
-        <label class="filter-block-title" for="mem-on" data-i18n="filterMem">人数</label>
-      </div>
-      <div class="filter-inputs">
-        <input type="number" id="mem-val" min="0" max="30" value="5">
-        <span class="filter-unit" data-i18n="filterPeople">人</span>
-        <select id="mem-mode">
-          <option value="below" data-i18n="filterBelow">以下</option>
-          <option value="above" data-i18n="filterAbove">以上</option>
-        </select>
+      <input type="checkbox" class="filter-check" id="mem-on">
+      <label class="filter-block-title" for="mem-on" data-i18n="filterMem">人数</label>
+      <input type="range" id="mem-val" min="1" max="6" step="1" value="5">
+      <span class="filter-val-display"><span id="mem-val-display">5</span><span data-i18n="filterPeople">人</span></span>
+      <div class="filter-mode-toggle" id="mem-mode-toggle" role="group">
+        <button type="button" class="mode-btn" data-mode="above" data-i18n="filterAbove" aria-pressed="false">以上</button>
+        <button type="button" class="mode-btn" data-mode="below" data-i18n="filterBelow" aria-pressed="true">以下</button>
       </div>
     </div>
   </div>
@@ -829,7 +835,7 @@
       <a class="info-link-btn bmc-btn" href="https://buymeacoffee.com/ermichanglv" target="_blank">
         ☕ Buy Me a Coffee
       </a>
-      <a class="info-link-btn afdian-btn" href="https://ifdian.net/a/hamuble" target="_blank">
+      <a class="info-link-btn afdian-btn" href="https://ifdian.net/a/ermi-chang" target="_blank">
         💙 爱发电
       </a>
     </div>
