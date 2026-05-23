@@ -917,6 +917,13 @@
     const hellPopupBody = popContainer.querySelector('.prt-start-event-hell');
     if (!hellPopupBody) return;
     if (!activeHellPopup) return;
+    // SELF_HOST_RE 昇格ブロックと同じ TTL ガード。古い activeHellPopup が
+    // 別 hell のポップアップ OK で誤って消費されるのを防ぐ。
+    if (Date.now() - activeHellPopup.ts > PENDING_HELL_TTL) {
+      console.log('[hamuble:hell] V2 skip popup OK skipped: activeHellPopup TTL expired', { age: Date.now() - activeHellPopup.ts });
+      activeHellPopup = null;
+      return;
+    }
 
     const skipCheckbox   = popContainer.querySelector('#hell-skip-setting');
     const skipNumSelect  = popContainer.querySelector('#skip-num-count');
