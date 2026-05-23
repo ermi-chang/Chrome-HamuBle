@@ -131,19 +131,17 @@ async function loadAll() {
 function applySettingsToUI() {
   elHpOn.checked     = settings.hpOn;
   setModeToggle(elHpModeToggle, settings.hpMode);
-  const clampedHp = Math.min(100, Math.max(20, (parseFloat(settings.hpVal) || 50)));
-  if (clampedHp !== settings.hpVal) {
-    settings.hpVal = clampedHp;
-    saveAll();
-  }
+  // hp/mem の range 範囲外マイグレーションは先にまとめて行い、
+  // saveAll() を 1 回だけにすることで中間状態が storage に書き込まれないようにする。
+  const clampedHp  = Math.min(100, Math.max(20, (parseFloat(settings.hpVal) || 50)));
+  const clampedMem = Math.min(6,   Math.max(1,  (parseInt(settings.memVal, 10) || 5)));
+  let migrated = false;
+  if (clampedHp  !== settings.hpVal)  { settings.hpVal  = clampedHp;  migrated = true; }
+  if (clampedMem !== settings.memVal) { settings.memVal = clampedMem; migrated = true; }
+  if (migrated) saveAll();
   elHpVal.value      = clampedHp;
   elHpValDisplay.textContent = clampedHp;
   elMemOn.checked    = settings.memOn;
-  const clampedMem = Math.min(6, Math.max(1, (parseInt(settings.memVal, 10) || 5)));
-  if (clampedMem !== settings.memVal) {
-    settings.memVal = clampedMem;
-    saveAll();
-  }
   setModeToggle(elMemModeToggle, settings.memMode);
   elMemVal.value     = clampedMem;
   elMemValDisplay.textContent = clampedMem;
