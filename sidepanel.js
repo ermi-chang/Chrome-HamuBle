@@ -65,14 +65,16 @@ const btnAssist      = document.getElementById('btn-assist');
 const btnAssistUnclaimed = document.getElementById('btn-assist-unclaimed');
 const btnHome        = document.getElementById('btn-home');
 
-const elHpOn    = document.getElementById('hp-on');
-const elHpMode  = document.getElementById('hp-mode');
-const elHpVal   = document.getElementById('hp-val');
-const elHpBlock = document.getElementById('hp-block');
-const elMemOn   = document.getElementById('mem-on');
-const elMemMode = document.getElementById('mem-mode');
-const elMemVal  = document.getElementById('mem-val');
-const elMemBlock= document.getElementById('mem-block');
+const elHpOn          = document.getElementById('hp-on');
+const elHpModeToggle  = document.getElementById('hp-mode-toggle');
+const elHpVal         = document.getElementById('hp-val');
+const elHpValDisplay  = document.getElementById('hp-val-display');
+const elHpBlock       = document.getElementById('hp-block');
+const elMemOn         = document.getElementById('mem-on');
+const elMemModeToggle = document.getElementById('mem-mode-toggle');
+const elMemVal        = document.getElementById('mem-val');
+const elMemValDisplay = document.getElementById('mem-val-display');
+const elMemBlock      = document.getElementById('mem-block');
 const elBpOn    = document.getElementById('bp-on');
 const elBpBlock = document.getElementById('bp-block');
 const elSort    = document.getElementById('sort');
@@ -128,11 +130,23 @@ async function loadAll() {
 
 function applySettingsToUI() {
   elHpOn.checked     = settings.hpOn;
-  elHpMode.value     = settings.hpMode;
-  elHpVal.value      = settings.hpVal;
+  setModeToggle(elHpModeToggle, settings.hpMode);
+  const clampedHp = Math.min(100, Math.max(20, (parseFloat(settings.hpVal) || 50)));
+  if (clampedHp !== settings.hpVal) {
+    settings.hpVal = clampedHp;
+    saveAll();
+  }
+  elHpVal.value      = clampedHp;
+  elHpValDisplay.textContent = clampedHp;
   elMemOn.checked    = settings.memOn;
-  elMemMode.value    = settings.memMode;
-  elMemVal.value     = settings.memVal;
+  const clampedMem = Math.min(6, Math.max(1, (parseInt(settings.memVal, 10) || 5)));
+  if (clampedMem !== settings.memVal) {
+    settings.memVal = clampedMem;
+    saveAll();
+  }
+  setModeToggle(elMemModeToggle, settings.memMode);
+  elMemVal.value     = clampedMem;
+  elMemValDisplay.textContent = clampedMem;
   elBpOn.checked     = settings.bpOn;
   elSort.value       = settings.sort;
   setPillValue('icon-bar-pos-btns',      settings.iconBarPos || 'left');
@@ -152,6 +166,13 @@ const setPillValue = (id, v) =>
 
 const getPillValue = (id, fb) =>
   document.querySelector(`#${id} .pill.active`)?.dataset.value ?? fb;
+
+function setModeToggle(toggleEl, mode) {
+  toggleEl.querySelectorAll('.mode-btn').forEach(b =>
+    b.setAttribute('aria-pressed', b.dataset.mode === mode ? 'true' : 'false'));
+}
+const getModeToggle = (toggleEl, fb) =>
+  toggleEl.querySelector('.mode-btn[aria-pressed="true"]')?.dataset.mode ?? fb;
 
 function updateLangPicker(lang) {
   document.querySelectorAll('#lang-btns .pill').forEach(b => {
@@ -194,11 +215,13 @@ function applyHostHistoryCols() {
 
 function readSettingsFromUI() {
   settings.hpOn    = elHpOn.checked;
-  settings.hpMode  = elHpMode.value;
-  settings.hpVal   = parseFloat(elHpVal.value) || 50;
+  settings.hpMode  = getModeToggle(elHpModeToggle, 'above');
+  const hpRaw     = parseFloat(elHpVal.value) || 50;
+  settings.hpVal  = Math.min(100, Math.max(20, hpRaw));
   settings.memOn   = elMemOn.checked;
-  settings.memMode = elMemMode.value;
-  settings.memVal  = parseInt(elMemVal.value, 10) || 5;
+  settings.memMode = getModeToggle(elMemModeToggle, 'below');
+  const memRaw    = parseInt(elMemVal.value, 10) || 5;
+  settings.memVal = Math.min(6, Math.max(1, memRaw));
   settings.bpOn    = elBpOn.checked;
   settings.sort    = elSort.value;
   settings.iconBarPos      = getPillValue('icon-bar-pos-btns', 'left');
@@ -514,6 +537,11 @@ chrome.runtime.onMessage.addListener((message) => {
       applyMaxLimitedCountFallback(merged);
 
       questMeta[e.questId] = merged;
+
+      // hell エントリは同一 dataid の sibling にも回数を伝播（将来 V2 復活時の保険）
+      if (merged.isHellQuest) {
+        syncHellLimitedAcrossSiblings(e.questId);
+      }
     }
     saveHostHistory();
     if (activeTab === 'host-history') renderHostHistory();
@@ -557,6 +585,9 @@ chrome.runtime.onMessage.addListener((message) => {
     if (Number.isFinite(qm.limitedCount)) {
       qm.maxLimitedCount = qm.limitedCount;
     }
+
+    // 同一 dataid の sibling hell（レベル別カード）にも回数を伝播
+    syncHellLimitedAcrossSiblings(qid);
 
     const existing = hostHistory.find(r => String(r.questId) === String(qid));
     if (existing) {
@@ -636,8 +667,10 @@ function filterSnapshot(name) {
 }
 function applyTemplate(tpl) {
   activeTplId = tpl.id;
-  settings.hpOn = tpl.hpOn; settings.hpMode = tpl.hpMode; settings.hpVal = tpl.hpVal;
-  settings.memOn = tpl.memOn; settings.memMode = tpl.memMode; settings.memVal = tpl.memVal;
+  settings.hpOn = tpl.hpOn; settings.hpMode = tpl.hpMode;
+  settings.hpVal = Math.min(100, Math.max(20, (parseFloat(tpl.hpVal) || 50)));
+  settings.memOn = tpl.memOn; settings.memMode = tpl.memMode;
+  settings.memVal = Math.min(6, Math.max(1, (parseInt(tpl.memVal, 10) || 5)));
   settings.bpOn = tpl.bpOn ?? false;
   applySettingsToUI(); saveAll(); renderTemplates(); renderFiltered();
 }
@@ -1048,10 +1081,75 @@ async function loadHostHistory() {
       if (pruneExpiredEventAdventHosts()) dirty = true;
       if (pruneExpiredActiveEvents())     dirty = true;
       if (pruneStaleEtcHosts())           dirty = true;
+      // 既存ストレージの hell カウンタを dataid 単位に揃える（min 採用）
+      if (migrateHellSharedLimited())     dirty = true;
       if (dirty) saveHostHistory();
       resolve();
     });
   });
+}
+
+// ── Hell 回数の dataid 共有 ─────────────────────────
+// GBF 仕様で同一カテゴリ hell（例: Lv60 / Lv90）は回数を共有する。
+// questId は `hell_<dataId>_<dataGroup>_<questIdNumeric>` 形式でレベル別カードを
+// 保持するため、回数（limitedCount / maxLimitedCount）だけを dataid 単位で sibling
+// 間に伝播させる。
+function getHellDataidKey(questId) {
+  if (typeof questId !== 'string' || !questId.startsWith('hell_')) return null;
+  const parts = questId.split('_');
+  // 新形式: hell_<id>_<group>_<numeric> → hell_<id>_<group>
+  // 旧形式: hell_<id>_<group> → そのまま
+  if (parts.length <= 3) return questId;
+  return parts.slice(0, 3).join('_');
+}
+
+function syncHellLimitedAcrossSiblings(questId) {
+  const key = getHellDataidKey(questId);
+  if (!key) return;
+  const src = questMeta[questId];
+  if (!src) return;
+  const limited = src.limitedCount;
+  const max     = src.maxLimitedCount;
+  for (const qid in questMeta) {
+    if (qid === questId) continue;
+    if (getHellDataidKey(qid) !== key) continue;
+    const sib = questMeta[qid];
+    if (!sib || !sib.isHellQuest) continue;
+    if (Number.isFinite(limited)) sib.limitedCount    = limited;
+    if (Number.isFinite(max))     sib.maxLimitedCount = max;
+  }
+}
+
+// 起動時の既存ストレージマイグレーション。
+// 同一 dataidKey の全 hell エントリで limitedCount / maxLimitedCount を min に揃える
+// （実際の回数共有として安全な保守的選択）。
+function migrateHellSharedLimited() {
+  const groups = new Map(); // key → { limited: number|undefined, max: number|undefined }
+  for (const qid in questMeta) {
+    const m = questMeta[qid];
+    if (!m || !m.isHellQuest) continue;
+    const key = getHellDataidKey(qid);
+    if (!key) continue;
+    const g = groups.get(key) || { limited: undefined, max: undefined };
+    if (Number.isFinite(m.limitedCount)) {
+      g.limited = (g.limited === undefined) ? m.limitedCount : Math.min(g.limited, m.limitedCount);
+    }
+    if (Number.isFinite(m.maxLimitedCount)) {
+      g.max = (g.max === undefined) ? m.maxLimitedCount : Math.min(g.max, m.maxLimitedCount);
+    }
+    groups.set(key, g);
+  }
+  let dirty = false;
+  for (const qid in questMeta) {
+    const m = questMeta[qid];
+    if (!m || !m.isHellQuest) continue;
+    const key = getHellDataidKey(qid);
+    const g = groups.get(key);
+    if (!g) continue;
+    if (Number.isFinite(g.limited) && m.limitedCount !== g.limited) { m.limitedCount = g.limited; dirty = true; }
+    if (Number.isFinite(g.max)     && m.maxLimitedCount !== g.max) { m.maxLimitedCount = g.max; dirty = true; }
+  }
+  return dirty;
 }
 
 // maxLimitedCount が取得できないクエスト向けの最終フォールバック。
@@ -1106,7 +1204,12 @@ function switchTab(tab) {
   if (tab === 'rescue') {
     load(false);
   } else if (tab === 'host-history') {
+    // 救援タブで付与された bp-locked クラスは #list を共有するマイクエストにも効くため
+    // タブ離脱時に解除する。救援に戻る際は load() → evaluateBpLock() で再判定される。
+    unlockPanel();
     renderHostHistory();
+  } else {
+    unlockPanel();
   }
   // info タブは静的コンテンツのみのため再描画不要
 }
@@ -1435,7 +1538,10 @@ async function hostHellQuest(questId, skipCount) {
   if (params && params.questIdNumeric && params.questType
       && Number.isFinite(skipCount) && skipCount > 0) {
     const back = params.backLink || 'quest!extra!event';
-    url = `https://game.granbluefantasy.jp/#quest/supporter/str_params/quest_id=${params.questIdNumeric}&quest_type=${params.questType}&skip_count=${skipCount}&is_event_hell_skip=1&back_link=${back}`;
+    // GBF 仕様変更で is_new_skip パラメータが必須となった。観測値があればそれを使い、
+    // 未観測（過去 skip ON 自発時にまだ採取していなかった既存エントリ）は 1 を fallback。
+    const newSkipValue = params.isNewSkip || '1';
+    url = `https://game.granbluefantasy.jp/#quest/supporter/str_params/quest_id=${params.questIdNumeric}&quest_type=${params.questType}&skip_count=${skipCount}&is_event_hell_skip=1&is_new_skip=${newSkipValue}&back_link=${back}`;
     params.lastUsedSkipCount = skipCount;
     primed = true;
   }
@@ -1484,6 +1590,8 @@ async function hostQuest(card, entry) {
 
 // ── フィルター変更イベント ─────────────────────────────
 function onFilterChange() {
+  elHpValDisplay.textContent = elHpVal.value;
+  elMemValDisplay.textContent = elMemVal.value;
   readSettingsFromUI();
   updateFilterBlockState();
   activeTplId = null;
@@ -1491,8 +1599,16 @@ function onFilterChange() {
   saveAll();
   renderFiltered();
 }
-[elHpOn, elMemOn, elBpOn, elHpMode, elMemMode, elSort].forEach(el => el.addEventListener('change', onFilterChange));
+[elHpOn, elMemOn, elBpOn, elSort].forEach(el => el.addEventListener('change', onFilterChange));
 [elHpVal, elMemVal].forEach(el => el.addEventListener('input', onFilterChange));
+[elHpModeToggle, elMemModeToggle].forEach(toggle => {
+  toggle.addEventListener('click', e => {
+    const btn = e.target.closest('.mode-btn');
+    if (!btn) return;
+    setModeToggle(toggle, btn.dataset.mode);
+    onFilterChange();
+  });
+});
 
 // ── アイコンバー切替 ──────────────────────────────────
 elIconBar.addEventListener('click', (e) => {
