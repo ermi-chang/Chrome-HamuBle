@@ -265,6 +265,10 @@ const TRANSLATIONS = {
     // Confirm dialogs
     confirmClearAll: '确定删除全部我的任务（{count}条）吗？',
     confirmClearCat: '确定删除当前分类的 {count} 条任务吗？',
+    // Favorites bar
+    favEmpty:             '（空）',
+    favEditTitle:         '重命名',
+    favRenamePlaceholder: '输入名称...',
   },
 };
 

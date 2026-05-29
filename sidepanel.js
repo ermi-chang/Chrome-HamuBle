@@ -18,7 +18,11 @@ let isLoading   = false;
 let settings    = { ...DEFAULTS };
 let templates   = [];
 let activeTplId = null;
-let favorites   = [null, null, null, null, null]; // { url, title } | null
+const FAV_SLOT_COUNT = 10;
+const FAV_NAME_MAX = 20;
+const FAV_LONGPRESS_MS = 400;
+// favorites[i] = { url, title, customName, addedAt } | null
+let favorites   = new Array(FAV_SLOT_COUNT).fill(null);
 
 // ── BP 状態 ──────────────────────────────────────────
 // currentBP: GBF DOM から取れた現在の BP。null = 未取得（救援タブ非表示時など）
@@ -29,7 +33,7 @@ let panelLockUntilBp = null;
 // ── マイクエスト状態 ────────────────────────────────────
 let activeTab       = 'rescue';   // 'rescue' | 'host-history' | 'info'
 let prevTab         = 'rescue';   // info タブ離脱先
-let hostHistory     = [];         // [{ questId, questType, treasureId, lastTimestamp, todayCount, raidCategory, eventPeriodEndMs? }]
+let hostHistory     = [];         // [{ questId, questType, treasureId, lastTimestamp, todayCount, raidCategory, eventPeriodEndMs?, eventName? }]
 let questMeta       = {};         // { [questId]: { chapterName, limitedCount, maxLimitedCount, ... } }
 let hostHistoryDate = '';         // GBF日付文字列
 // 開催中／予告イベント。content.js が #event/.. または #teaser/.. を踏むたびに更新。periodEndMs 経過で自動除去。
@@ -123,6 +127,21 @@ async function loadAll() {
       }
       if (data.gbfRfTemplates) templates = data.gbfRfTemplates;
       if (Array.isArray(data.gbfRfFavorites)) favorites = data.gbfRfFavorites;
+      // ── マイグレーション: 旧 5 スロット → 新 10 スロット、customName / addedAt 補完 ──
+      if (favorites.length < FAV_SLOT_COUNT) {
+        while (favorites.length < FAV_SLOT_COUNT) favorites.push(null);
+      } else if (favorites.length > FAV_SLOT_COUNT) {
+        favorites.length = FAV_SLOT_COUNT;
+      }
+      let favDirty = false;
+      for (let i = 0; i < FAV_SLOT_COUNT; i++) {
+        const f = favorites[i];
+        if (f && typeof f === 'object') {
+          if (typeof f.customName !== 'string') { f.customName = ''; favDirty = true; }
+          if (typeof f.addedAt !== 'number')    { f.addedAt = Date.now(); favDirty = true; }
+        }
+      }
+      if (favDirty) chrome.storage.local.set({ gbfRfFavorites: favorites });
       resolve();
     });
   });
@@ -253,23 +272,234 @@ function getActiveTab() {
 }
 
 // ── お気に入りバー ────────────────────────────────────
+function favDisplayName(fav) {
+  if (!fav) return '';
+  return (fav.customName && fav.customName.trim()) || fav.title || fav.url || '';
+}
+
 function renderFavBar() {
-  for (let i = 0; i < 5; i++) {
-    const btn = document.querySelector(`.fav-btn[data-index="${i}"]`);
-    const rm  = document.querySelector(`.fav-remove[data-index="${i}"]`);
-    if (!btn || !rm) continue;
-    if (favorites[i]) {
-      btn.textContent = String(i + 1);
-      btn.classList.add('filled');
-      btn.title = favorites[i].title ? `${favorites[i].title}\n${favorites[i].url}` : favorites[i].url;
-      rm.classList.add('visible');
-    } else {
-      btn.textContent = '+';
-      btn.classList.remove('filled');
-      btn.title = '';
-      rm.classList.remove('visible');
+  const bar = document.getElementById('fav-bar');
+  if (!bar) return;
+  bar.innerHTML = '';
+  for (let i = 0; i < FAV_SLOT_COUNT; i++) {
+    const fav = favorites[i];
+    const filled = !!fav;
+    const slot = document.createElement('div');
+    slot.className = 'fav-slot';
+    slot.dataset.index = String(i);
+
+    const btn = document.createElement('button');
+    btn.className = 'fav-btn' + (filled ? ' filled' : '');
+    btn.dataset.index = String(i);
+    btn.textContent = filled ? String(i + 1) : '+';
+    if (filled) {
+      const dn = favDisplayName(fav);
+      btn.title = dn ? `${dn}\n${fav.url}` : fav.url;
     }
+    slot.appendChild(btn);
+
+    const rm = document.createElement('button');
+    rm.className = 'fav-remove' + (filled ? ' visible' : '');
+    rm.dataset.index = String(i);
+    rm.textContent = '×';
+    slot.appendChild(rm);
+
+    const label = document.createElement('div');
+    label.className = 'fav-label';
+    const labelText = document.createElement('span');
+    labelText.className = 'fav-label-text' + (filled ? '' : ' empty');
+    labelText.textContent = filled ? favDisplayName(fav) : t('favEmpty');
+    label.appendChild(labelText);
+    if (filled) {
+      const edit = document.createElement('button');
+      edit.className = 'fav-edit';
+      edit.dataset.index = String(i);
+      edit.textContent = '✎';
+      edit.title = t('favEditTitle');
+      label.appendChild(edit);
+    }
+    slot.appendChild(label);
+
+    bar.appendChild(slot);
   }
+  attachFavBarHandlers();
+}
+
+// ── お気に入りバー: ハンドラ（短クリック・長押しD&D・編集・削除） ──
+let favDragState = null; // { srcIdx, ghost, justDragged }
+
+function attachFavBarHandlers() {
+  const slots = document.querySelectorAll('#fav-bar .fav-slot');
+  slots.forEach(slot => {
+    const idx = Number(slot.dataset.index);
+    const btn = slot.querySelector('.fav-btn');
+    const rm  = slot.querySelector('.fav-remove');
+    const edit = slot.querySelector('.fav-edit');
+
+    let pressTimer = null;
+    let pressUpListener = null;
+    let dragModeForThisSlot = false;
+
+    const clearPress = () => {
+      if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+      if (pressUpListener) {
+        document.removeEventListener('mouseup', pressUpListener);
+        pressUpListener = null;
+      }
+    };
+
+    btn.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      if (!favorites[idx]) return; // 空きスロットはドラッグ不可
+      const startX = e.clientX, startY = e.clientY;
+      pressTimer = setTimeout(() => {
+        clearPress();
+        dragModeForThisSlot = true;
+        beginFavDrag(idx, slot, startX, startY);
+      }, FAV_LONGPRESS_MS);
+      pressUpListener = () => clearPress();
+      document.addEventListener('mouseup', pressUpListener);
+      e.preventDefault();
+    });
+
+    btn.addEventListener('click', async (e) => {
+      // ドラッグ完了直後の click を抑止
+      if (favDragState && favDragState.justDragged) return;
+      if (dragModeForThisSlot) { dragModeForThisSlot = false; return; }
+      const tab = await getActiveTab();
+      if (!tab || !tab.url) return;
+      if (favorites[idx]) {
+        chrome.tabs.update(tab.id, { url: favorites[idx].url, active: true });
+      } else {
+        favorites[idx] = {
+          url: tab.url,
+          title: tab.title || '',
+          customName: '',
+          addedAt: Date.now(),
+        };
+        saveFavorites();
+        renderFavBar();
+      }
+    });
+
+    if (rm) {
+      rm.addEventListener('mousedown', (e) => e.stopPropagation());
+      rm.addEventListener('click', (e) => {
+        e.stopPropagation();
+        favorites[idx] = null;
+        saveFavorites();
+        renderFavBar();
+      });
+    }
+
+    if (edit) {
+      edit.addEventListener('mousedown', (e) => e.stopPropagation());
+      edit.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        enterFavRenameMode(slot, idx);
+      });
+    }
+  });
+}
+
+// sidepanel iframe 外には描画不可（ブラウザのフレーム分離制約）。
+// icon-bar-pos に応じてゴーストを main-content 側へオフセットし、
+// それでもはみ出る場合は viewport にクランプして必ず全体が見えるようにする。
+function positionFavGhost(ghost, x, y) {
+  const ghostW = 22;
+  const ghostH = 22;
+  const margin = 4;
+  const favBarOnRight = !document.body.classList.contains('icon-bar-right');
+  let gx = favBarOnRight ? (x - ghostW - 8) : (x + 8);
+  let gy = y + 8;
+  gx = Math.max(margin, Math.min(window.innerWidth  - ghostW - margin, gx));
+  gy = Math.max(margin, Math.min(window.innerHeight - ghostH - margin, gy));
+  ghost.style.left = gx + 'px';
+  ghost.style.top  = gy + 'px';
+}
+
+function beginFavDrag(srcIdx, srcSlot, startX, startY) {
+  srcSlot.classList.add('dragging');
+  const ghost = document.createElement('div');
+  ghost.className = 'fav-ghost';
+  ghost.textContent = String(srcIdx + 1);
+  positionFavGhost(ghost, startX, startY);
+  document.body.appendChild(ghost);
+  favDragState = { srcIdx, ghost, justDragged: false };
+
+  const move = (e) => {
+    positionFavGhost(ghost, e.clientX, e.clientY);
+    document.querySelectorAll('#fav-bar .fav-slot').forEach(s => s.classList.remove('drop-target'));
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const target = el && el.closest ? el.closest('#fav-bar .fav-slot') : null;
+    if (target && target !== srcSlot) target.classList.add('drop-target');
+  };
+  const up = (e) => {
+    document.removeEventListener('mousemove', move);
+    document.removeEventListener('mouseup', up);
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const target = el && el.closest ? el.closest('#fav-bar .fav-slot') : null;
+    document.querySelectorAll('#fav-bar .fav-slot').forEach(s => s.classList.remove('drop-target'));
+    srcSlot.classList.remove('dragging');
+    if (ghost.parentNode) ghost.parentNode.removeChild(ghost);
+    if (target && target !== srcSlot) {
+      const dstIdx = Number(target.dataset.index);
+      const [item] = favorites.splice(srcIdx, 1);
+      const insertIdx = srcIdx < dstIdx ? dstIdx - 1 : dstIdx;
+      favorites.splice(insertIdx, 0, item);
+      // 念のため固定長を保証（splice 操作で長さは変わらない想定だが防御的に）
+      while (favorites.length < FAV_SLOT_COUNT) favorites.push(null);
+      if (favorites.length > FAV_SLOT_COUNT) favorites.length = FAV_SLOT_COUNT;
+      saveFavorites();
+    }
+    favDragState.justDragged = true;
+    setTimeout(() => { favDragState = null; }, 50);
+    renderFavBar();
+  };
+  document.addEventListener('mousemove', move);
+  document.addEventListener('mouseup', up);
+}
+
+function enterFavRenameMode(slot, idx) {
+  const fav = favorites[idx];
+  if (!fav) return;
+  const label = slot.querySelector('.fav-label');
+  if (!label) return;
+  slot.classList.add('renaming');
+  const current = fav.customName || fav.title || '';
+  label.innerHTML = '';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'fav-rename-input';
+  input.maxLength = FAV_NAME_MAX;
+  input.value = current;
+  input.placeholder = t('favRenamePlaceholder');
+  label.appendChild(input);
+  // 入力中はラベルの hover 解除や mousedown 伝播を抑止
+  input.addEventListener('mousedown', (e) => e.stopPropagation());
+  input.addEventListener('click', (e) => e.stopPropagation());
+
+  let finalized = false;
+  const finalize = (commit) => {
+    if (finalized) return;
+    finalized = true;
+    slot.classList.remove('renaming');
+    if (commit) {
+      const v = input.value.trim().slice(0, FAV_NAME_MAX);
+      if (favorites[idx]) {
+        favorites[idx].customName = v;
+        saveFavorites();
+      }
+    }
+    renderFavBar();
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); finalize(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finalize(false); }
+  });
+  input.addEventListener('blur', () => finalize(true));
+  setTimeout(() => { input.focus(); input.select(); }, 0);
 }
 function askContent(tabId, msg) {
   return new Promise((resolve, reject) => {
@@ -417,6 +647,10 @@ chrome.runtime.onMessage.addListener((message) => {
       if (Number.isFinite(message.eventPeriodEndMs)) {
         existing.eventPeriodEndMs = message.eventPeriodEndMs;
       }
+      // 既存値があれば上書きしない (古い event 紐付けを誤って消すのを防ぐ)
+      if (!existing.eventName && typeof message.eventName === 'string' && message.eventName) {
+        existing.eventName = message.eventName;
+      }
     } else {
       const row = {
         questId:       message.questId,
@@ -428,6 +662,9 @@ chrome.runtime.onMessage.addListener((message) => {
       };
       if (Number.isFinite(message.eventPeriodEndMs)) {
         row.eventPeriodEndMs = message.eventPeriodEndMs;
+      }
+      if (typeof message.eventName === 'string' && message.eventName) {
+        row.eventName = message.eventName;
       }
       hostHistory.push(row);
     }
@@ -595,6 +832,9 @@ chrome.runtime.onMessage.addListener((message) => {
       if (Number.isFinite(message.eventPeriodEndMs)) {
         existing.eventPeriodEndMs = message.eventPeriodEndMs;
       }
+      if (!existing.eventName && typeof message.eventName === 'string' && message.eventName) {
+        existing.eventName = message.eventName;
+      }
     } else {
       const row = {
         questId:       qid,
@@ -605,6 +845,7 @@ chrome.runtime.onMessage.addListener((message) => {
         raidCategory:  'event',
       };
       if (Number.isFinite(message.eventPeriodEndMs)) row.eventPeriodEndMs = message.eventPeriodEndMs;
+      if (typeof message.eventName === 'string' && message.eventName) row.eventName = message.eventName;
       hostHistory.push(row);
     }
 
@@ -639,15 +880,19 @@ chrome.runtime.onMessage.addListener((message) => {
       eventName:    k,
       title:        String(message.title || '').trim() || k,
       periodText:   String(message.periodText || ''),
-      periodEndMs:  Number.isFinite(message.periodEndMs) ? message.periodEndMs : null,
+      periodEndMs:  Number.isFinite(message.periodEndMs) ? message.periodEndMs : (existing?.periodEndMs ?? null),
       hash:         typeof message.hash === 'string' ? message.hash : '',
       isTeaser:     !!message.isTeaser,
       isEnding:     !!message.isEnding,
+      isRewardClaim: !!message.isRewardClaim,
       lastSeenAt:   Date.now(),
       eventStartMs: Number.isFinite(message.eventStartMs) ? message.eventStartMs : (existing?.eventStartMs ?? null),
       eventEndMs:   Number.isFinite(message.eventEndMs)   ? message.eventEndMs   : (existing?.eventEndMs   ?? null),
     };
     pruneExpiredActiveEvents();
+    // activeEvents 変動に同期して hostHistory 側の event エントリも掃除する
+    //  (eventName 照合経路を即時反映するため)。
+    pruneExpiredEventAdventHosts();
     saveHostHistory();
     if (activeTab === 'host-history') renderHostHistory();
   }
@@ -943,6 +1188,17 @@ function pruneExpiredActiveEvents() {
       continue;
     }
 
+    // 2.5. Reward 受け取り期間中: 期間終了で即削除（+7日 TTL なし）。
+    // GBF 側のページ自体が消えるため、それ以上保持する意味がない。
+    if (e.isRewardClaim) {
+      const rewardEnd = Number.isFinite(e.eventEndMs) ? e.eventEndMs : e.periodEndMs;
+      if (Number.isFinite(rewardEnd) && rewardEnd <= now) {
+        delete activeEvents[k];
+        changed = true;
+      }
+      continue;
+    }
+
     // 3. Active / 開催終了: eventEndMs を主キーに TTL 管理
     const endMs = Number.isFinite(e.eventEndMs) ? e.eventEndMs
                 : Number.isFinite(e.periodEndMs) ? e.periodEndMs
@@ -981,26 +1237,41 @@ function shouldShowEventBanner() {
   return cats.includes('all') || cats.includes('event');
 }
 
-/** #event/advent 由来で eventPeriodEndMs があるマイクエストを、終了後に履歴から除去 */
+/** イベントカテゴリのマイクエスト履歴を、イベント終了に同期して履歴から除去する。
+ *  優先順:
+ *   1. eventPeriodEndMs が有限 → now がそれを過ぎていれば削除。
+ *   2. eventName が紐付いていて、その eventName が activeEvents に存在しない
+ *      (= 観測中の開催中／予告イベントには無い) → 終了済みと見なし削除。
+ *      activeEvents には eventEndMs + 7 日まで残るため、その間は誤削除しない。
+ *   3. どちらの情報も持たないレガシーエントリは、lastTimestamp が現在より
+ *      EVENT_STALE_MS (21 日) 以上前なら削除。GBF の通常イベント尺
+ *      (1-2 週間、エンディング期間込みでも 3 週間以内) を超えるものは
+ *      終了済みと判断して問題ない。
+ */
 function pruneExpiredEventAdventHosts() {
   const now = Date.now();
+  const EVENT_STALE_MS = 21 * 24 * 60 * 60 * 1000;
   const catOf = (r) => r.raidCategory || questMeta[r.questId]?.raidCategory || 'etc';
-
-  // 期限不明 event エントリの一掃判定:
-  //   - activeEvents が空 (= 観測した全イベントが終了済み) かつ
-  //   - 期限既知の event エントリが 1 つ以上あり、それらが全部期限切れ
-  // を満たす場合のみ、期限不明 event エントリも巻き込んで削除する。
-  // → 旧データ救済用。観測なし状態での誤削除は起きない。
-  const eventEntries = hostHistory.filter(r => catOf(r) === 'event');
-  const knownEnds = eventEntries.filter(r => Number.isFinite(r.eventPeriodEndMs));
-  const allKnownExpired = knownEnds.length > 0 && knownEnds.every(r => r.eventPeriodEndMs <= now);
-  const sweepUnknown = Object.keys(activeEvents).length === 0 && allKnownExpired;
 
   const next = hostHistory.filter((r) => {
     if (catOf(r) !== 'event') return true;
+
+    // (1) 期限既知 → 過ぎていれば削除
     const end = r.eventPeriodEndMs;
-    if (!Number.isFinite(end)) return !sweepUnknown;
-    return now < end;
+    if (Number.isFinite(end)) return now < end;
+
+    // (2) eventName 紐付き → 対応 activeEvents が無ければ終了済み扱い
+    if (typeof r.eventName === 'string' && r.eventName) {
+      if (!activeEvents[r.eventName]) return false;
+      return true;
+    }
+
+    // (3) 情報なしレガシー → lastTimestamp ベースの stale 判定
+    if (Number.isFinite(r.lastTimestamp) && r.lastTimestamp > 0
+        && (now - r.lastTimestamp) > EVENT_STALE_MS) {
+      return false;
+    }
+    return true;
   });
   if (next.length === hostHistory.length) return false;
   hostHistory = next;
@@ -1256,6 +1527,10 @@ function buildActiveEventsBannerHTML() {
     if (e.isTeaser) {
       teasers.push(e);
     } else if (e.isEnding) {
+      ended.push(e);
+    } else if (e.isRewardClaim) {
+      // 報酬受け取り期間中はフラグ優先で常に「終了」群に固定（eventEndMs が
+      // reward 期間終了日＝未来でも actives 群に戻さない）
       ended.push(e);
     } else {
       // eventEndMs 優先。なければ periodEndMs（後方互換）
@@ -1560,6 +1835,10 @@ async function hostHellQuest(questId, skipCount) {
       // 消費は HELL_QUEST_CONSUMED（Support OK + 離脱）に委ねる。
       // content.js に pendingHellHost を仕込ませる。
       try {
+        // hostHistory 側に保持している eventName を引き継ぐ
+        //  (meta には保存していないため、該当 questId の行から拾う)。
+        const histRow = hostHistory.find(r => String(r.questId) === String(questId));
+        const histEventName = (histRow && typeof histRow.eventName === 'string') ? histRow.eventName : '';
         await chrome.tabs.sendMessage(tab.id, {
           type:             'MYQUEST_HELL_PRIME',
           questId,
@@ -1568,6 +1847,7 @@ async function hostHellQuest(questId, skipCount) {
           chapterName:      meta?.chapterName || '',
           hostThumbnailSrc: meta?.hostThumbnailSrc || meta?.questThumbnailSrc || '',
           eventPeriodEndMs: Number.isFinite(meta?.eventPeriodEndMs) ? meta.eventPeriodEndMs : null,
+          eventName:        histEventName,
           hellSkipParams:   params,
         });
       } catch (_) { /* content script が未注入 (= ゲーム外ページ) なら諦め */ }
@@ -1767,31 +2047,6 @@ tplNameInput.addEventListener('keydown', (e) => {
   applySettingsToUI();
   renderTemplates();
   renderFavBar();
-
-  document.querySelectorAll('.fav-btn').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const idx = Number(btn.dataset.index);
-      const tab = await getActiveTab();
-      if (!tab || !tab.url) return;
-      if (favorites[idx]) {
-        chrome.tabs.update(tab.id, { url: favorites[idx].url, active: true });
-      } else {
-        favorites[idx] = { url: tab.url, title: tab.title || '' };
-        saveFavorites();
-        renderFavBar();
-      }
-    });
-  });
-
-  document.querySelectorAll('.fav-remove').forEach(rm => {
-    rm.addEventListener('click', e => {
-      e.stopPropagation();
-      const idx = Number(rm.dataset.index);
-      favorites[idx] = null;
-      saveFavorites();
-      renderFavBar();
-    });
-  });
 
   load(false);
 
