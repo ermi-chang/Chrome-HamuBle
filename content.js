@@ -39,6 +39,9 @@
 
   /** #event/advent の .prt-period から得た終了時刻（Unix ms）。DOM再描画用に保持 */
   let cachedEventAdventPeriodEndMs = null;
+  /** 直近で観測した確定イベントの eventName。自発時に hostHistory エントリへ紐付けて
+   *  「イベント終了に同期した自動削除」を可能にするための照合キー。teaser/ending では更新しない。*/
+  let cachedEventName = '';
 
   // ── 自発待機状態 ─────────────────────────────────────
   // サポート召喚石選択ページに遷移した時点で保持し、
@@ -107,6 +110,7 @@
       raidCategory:      'event',
       hostThumbnailSrc:  pendingHellHost.hostThumbnailSrc,
       eventPeriodEndMs:  pendingHellHost.eventPeriodEndMs,
+      eventName:         pendingHellHost.eventName || '',
       limitedCountAfter: after,
       consumedCount:     skipNum,
       // skip URL から採取した quest_id/quest_type/back_link を sidepanel 側に保存させる。
@@ -121,6 +125,7 @@
       chapterName:      pendingHellHost.chapterName,
       hostThumbnailSrc: pendingHellHost.hostThumbnailSrc,
       eventPeriodEndMs: pendingHellHost.eventPeriodEndMs,
+      eventName:        pendingHellHost.eventName || '',
       hellSkipParams:   pendingHellHost.hellSkipParams || null,
       ts:               Date.now(),
     };
@@ -152,6 +157,7 @@
       isRetry:      !!pendingHost.isRetry,
       proQuestSkip: pendingHost.proQuestSkip ?? null,
       eventPeriodEndMs: pendingHost.eventPeriodEndMs ?? null,
+      eventName:    pendingHost.eventName || '',
       hostThumbnailSrc: pendingHost.hostThumbnailSrc || '',
     }).catch(() => {});
     pendingHost = null;
@@ -287,17 +293,41 @@
   // #event/... と #teaser/... は #title を共有するが、
   // 開催期間は #event/... が .prt-period、#teaser/... が .txt-teaser-title に置かれる。
   // #event_name は #event/X 系のみ DOM に存在する。teaser は URL の数値 ID で識別する。
-  // イベントタブには #event/* / #teaser/*（1 セグメント）のみ反映する。
-  // #event/N/M 等のミニイベント／サブページはタイトル・期間が
-  // メインイベント(キー "N")を上書きするため、ここで対象外にする。
+  // イベントタブには #event/* / #teaser/*（1 セグメント）を反映する。
+  // 加えて、開催終了後の報酬受け取り期間中は #event/N/event_top や
+  // #event/N/reward のような 2 セグメント URL に切り替わるため、第 2 セグメント
+  // が「非数値」のときに限り許可する。
+  // #event/N/M（M が数値）はミニイベント／サブページで、タイトル・期間が
+  // メインイベント(キー "N")を上書きするため、引き続き対象外にする。
   function isEventOrTeaserHash(hash) {
-    return typeof hash === 'string' && /^#(event|teaser)\/[^/?#]+\/?$/.test(hash);
+    return typeof hash === 'string'
+      && /^#(event|teaser)\/[^/?#]+(?:\/[^0-9/?#][^/?#]*)?\/?$/.test(hash);
+  }
+
+  // 開催終了後の「報酬受け取り期間」中は #event/N/event_top や
+  // #event/N/reward のような 2 セグメント URL になる。
+  // この期間中は periodText だけは新しい受け取り期間日付に追従させたいが、
+  // 「開催自体は終了している」という分類は維持したいので、
+  // このヘルパが true のときは event start/end 時刻を上書きせず温存する。
+  function isEventRewardClaimHash(hash) {
+    return typeof hash === 'string'
+      && /^#event\/[^/?#]+\/[^0-9/?#][^/?#]*\/?$/.test(hash);
+  }
+
+  // .prt-period は報酬受け取り期間中に古い「開催期間」テキストが残ることがあるため、
+  // #cnt-event 配下の最も具体的な子 div を最優先で読み、見つからなければ
+  // 既存の .prt-period にフォールバックする。
+  function readEventPeriodTextRaw() {
+    const specific = document.querySelector('#cnt-event > div.prt-period > div')?.textContent;
+    const s = (specific || '').trim();
+    if (s) return s;
+    return (document.querySelector('.prt-period')?.textContent || '').trim();
   }
 
   function extractEventAdventPeriodEndMs() {
-    const el = document.querySelector('.prt-period');
-    if (!el) return null;
-    return parseEventPeriod(el.textContent || '')?.endMs ?? null;
+    const text = readEventPeriodTextRaw();
+    if (!text) return null;
+    return parseEventPeriod(text)?.endMs ?? null;
   }
 
   function refreshEventAdventPeriodCache() {
@@ -345,7 +375,7 @@
     if (!title || !eventName) return null;
 
     // .prt-period（#event/...）→ cnt-event prt-header（#event/interlude 等）→ .txt-teaser-title（#teaser/...）の順でフォールバック
-    let periodText = (document.querySelector('.prt-period')?.textContent || '').trim();
+    let periodText = readEventPeriodTextRaw();
     if (!periodText) {
       periodText = (document.querySelector(
         '#wrapper > div.contents > div.cnt-event > div.prt-header > div'
@@ -359,14 +389,17 @@
     const period = periodText ? parseEventPeriod(periodText) : null;
     // teaser はイベント開始時刻を「activeEvents から消える時刻」として使う。
     // バナー表示は periodText（開始～終了の文字列）のままで変えない。
-    const isTeaser = /^#teaser\//.test(hash);
-    const isEnding = !isTeaser && detectEventIsEnding(periodText);
-    const periodEndMs  = isTeaser ? (period?.startMs ?? null) : (period?.endMs ?? null);
+    const isTeaser      = /^#teaser\//.test(hash);
+    const isEnding      = !isTeaser && detectEventIsEnding(periodText);
+    // reward 期間 (#event/N/event_top 等) は parsed 値をそのまま送り、
+    // sidepanel 側で isRewardClaim フラグを見て「終了」群に固定する。
+    const isRewardClaim = isEventRewardClaimHash(hash);
+    const periodEndMs   = isTeaser ? (period?.startMs ?? null) : (period?.endMs ?? null);
     // タブ移動で失われないよう開始/終了時刻を独立して保持。
     // Ending ページは終了時刻が変わるため eventEndMs は送らず既存値を維持させる。
-    const eventStartMs = period?.startMs ?? null;
-    const eventEndMs   = !isEnding ? (period?.endMs ?? null) : null;
-    return { eventName, title, periodText, periodEndMs, hash, isTeaser, isEnding, eventStartMs, eventEndMs };
+    const eventStartMs  = period?.startMs ?? null;
+    const eventEndMs    = !isEnding ? (period?.endMs ?? null) : null;
+    return { eventName, title, periodText, periodEndMs, hash, isTeaser, isEnding, isRewardClaim, eventStartMs, eventEndMs };
   }
 
   function tryReportEventInfo() {
@@ -377,17 +410,23 @@
     if (!info.isTeaser && !info.isEnding && Number.isFinite(info.periodEndMs)) {
       cachedEventAdventPeriodEndMs = info.periodEndMs;
     }
+    // 自発時の event 紐付け用 eventName キャッシュ。teaser/ending では更新しない
+    // (期限不明なまま hostHistory に書かれて誤照合するのを避ける)。
+    if (!info.isTeaser && !info.isEnding && info.eventName) {
+      cachedEventName = info.eventName;
+    }
     chrome.runtime.sendMessage({
-      type:         'EVENT_INFO_DETECTED',
-      eventName:    info.eventName,
-      title:        info.title,
-      periodText:   info.periodText,
-      periodEndMs:  info.periodEndMs,
-      hash:         info.hash,
-      isTeaser:     !!info.isTeaser,
-      isEnding:     !!info.isEnding,
-      eventStartMs: Number.isFinite(info.eventStartMs) ? info.eventStartMs : null,
-      eventEndMs:   Number.isFinite(info.eventEndMs)   ? info.eventEndMs   : null,
+      type:           'EVENT_INFO_DETECTED',
+      eventName:      info.eventName,
+      title:          info.title,
+      periodText:     info.periodText,
+      periodEndMs:    info.periodEndMs,
+      hash:           info.hash,
+      isTeaser:       !!info.isTeaser,
+      isEnding:       !!info.isEnding,
+      isRewardClaim:  !!info.isRewardClaim,
+      eventStartMs:   Number.isFinite(info.eventStartMs) ? info.eventStartMs : null,
+      eventEndMs:     Number.isFinite(info.eventEndMs)   ? info.eventEndMs   : null,
     }).catch(() => {});
   }
 
@@ -772,6 +811,7 @@
       chapterName: title,
       hostThumbnailSrc: thumbSrc,
       eventPeriodEndMs,
+      eventName: cachedEventName || '',
       ts: Date.now(),
     };
     console.log('[hamuble:hell] ex-hell click → activeHellPopup', activeHellPopup);
@@ -810,6 +850,7 @@
       chapterName:      activeHellPopup.chapterName,
       hostThumbnailSrc: activeHellPopup.hostThumbnailSrc,
       eventPeriodEndMs: activeHellPopup.eventPeriodEndMs,
+      eventName:        activeHellPopup.eventName || '',
       before:           Number.isFinite(before) ? before : null,
       skipNum,
       skipOn,
@@ -895,6 +936,7 @@
       chapterName,
       hostThumbnailSrc: '', // skip popup の .img-hell-boss から OK 時に取得
       eventPeriodEndMs,
+      eventName: cachedEventName || '',
       ts: Date.now(),
       v2: true,
     };
@@ -946,6 +988,7 @@
       chapterName:      activeHellPopup.chapterName,
       hostThumbnailSrc,
       eventPeriodEndMs: activeHellPopup.eventPeriodEndMs,
+      eventName:        activeHellPopup.eventName || '',
       before:           Number.isFinite(before) ? before : null,
       skipNum,
       skipOn,
@@ -1079,9 +1122,14 @@
     // (#quest/extra の event タブ等) では tryReportEventInfo() 等で温まった cache から復元。
     // #sidestory/ は恒久コンテンツなので除外（誤った期限付与で消えるのを防ぐ）。
     let eventPeriodEndMs = null;
+    let eventName = '';
     if (category === 'event' && hash.indexOf('#sidestory/') !== 0) {
       const direct = isEventAdventHash(hash) ? extractEventAdventPeriodEndMs() : null;
       eventPeriodEndMs = direct || cachedEventAdventPeriodEndMs;
+      // sidepanel 側で activeEvents との照合に使う識別子。
+      // 期限値が取れない経路 (=cachedEventAdventPeriodEndMs 未温まり) でも、
+      // eventName だけ取れれば「該当イベント終了で同期削除」の経路が成立する。
+      eventName = cachedEventName || '';
     }
     pendingHost = {
       source:     'click',
@@ -1097,6 +1145,7 @@
       isRetry,
       proQuestSkip: isProQuest ? parseDatasetInt(el, ['proQuestSkip', 'pro_quest_skip'], null) : null,
       eventPeriodEndMs,
+      eventName,
     };
     if (pairThumb) {
       pendingHost.hostThumbnailSrc = pairThumb;
@@ -1178,6 +1227,7 @@
           chapterName:      lastFiredHell.chapterName,
           hostThumbnailSrc: lastFiredHell.hostThumbnailSrc,
           eventPeriodEndMs: lastFiredHell.eventPeriodEndMs,
+          eventName:        lastFiredHell.eventName || '',
           hellSkipParams: {
             questIdNumeric:  params.quest_id || lastFiredHell.hellSkipParams?.questIdNumeric || '',
             questType:       params.quest_type || lastFiredHell.hellSkipParams?.questType || '',
@@ -1212,6 +1262,7 @@
         chapterName:      activeHellPopup.chapterName,
         hostThumbnailSrc: activeHellPopup.hostThumbnailSrc,
         eventPeriodEndMs: activeHellPopup.eventPeriodEndMs,
+        eventName:        activeHellPopup.eventName || '',
         before:           null,
         skipNum:          1,
         skipOn:           false,
@@ -1297,6 +1348,7 @@
           chapterName:      message.chapterName || '',
           hostThumbnailSrc: message.hostThumbnailSrc || '',
           eventPeriodEndMs: Number.isFinite(message.eventPeriodEndMs) ? message.eventPeriodEndMs : null,
+          eventName:        typeof message.eventName === 'string' ? message.eventName : '',
           before:           Number.isFinite(message.before) ? message.before : null,
           skipNum:          message.skipNum,
           skipOn:           true,

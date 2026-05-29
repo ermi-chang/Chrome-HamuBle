@@ -132,16 +132,17 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   }
   if (message.type === 'EVENT_INFO_DETECTED') {
     chrome.runtime.sendMessage({
-      type:         'EVENT_INFO_DETECTED',
-      eventName:    message.eventName,
-      title:        message.title,
-      periodText:   message.periodText,
-      periodEndMs:  message.periodEndMs,
-      hash:         message.hash,
-      isTeaser:     !!message.isTeaser,
-      isEnding:     !!message.isEnding,
-      eventStartMs: Number.isFinite(message.eventStartMs) ? message.eventStartMs : null,
-      eventEndMs:   Number.isFinite(message.eventEndMs)   ? message.eventEndMs   : null,
+      type:           'EVENT_INFO_DETECTED',
+      eventName:      message.eventName,
+      title:          message.title,
+      periodText:     message.periodText,
+      periodEndMs:    message.periodEndMs,
+      hash:           message.hash,
+      isTeaser:       !!message.isTeaser,
+      isEnding:       !!message.isEnding,
+      isRewardClaim:  !!message.isRewardClaim,
+      eventStartMs:   Number.isFinite(message.eventStartMs) ? message.eventStartMs : null,
+      eventEndMs:     Number.isFinite(message.eventEndMs)   ? message.eventEndMs   : null,
     }).catch(() => {});
     return;
   }

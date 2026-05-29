@@ -62,7 +62,11 @@
       background: var(--bg1); border-left: 1px solid var(--bdr);
       order: 2;
     }
-    .fav-slot { position: relative; }
+    .fav-slot {
+      position: relative;
+      width: 22px; height: 22px;
+      flex-shrink: 0;
+    }
     .fav-btn {
       width: 22px; height: 22px;
       display: flex; align-items: center; justify-content: center;
@@ -70,18 +74,89 @@
       cursor: pointer; background: none; padding: 0;
       color: var(--tx2); font-size: 11px; font-weight: 700;
       transition: background .15s, color .15s;
+      user-select: none;
     }
     .fav-btn:hover { background: var(--bg2); color: var(--tx1); }
     .fav-btn.filled { color: var(--acc); border-color: var(--acc); }
     .fav-remove {
-      position: absolute; top: -4px; right: -4px;
+      position: absolute; top: -4px;
+      left: -4px; right: auto;
       width: 12px; height: 12px; border-radius: 50%;
       background: #c0392b; color: #fff;
       font-size: 9px; line-height: 12px; text-align: center;
       border: none; cursor: pointer; padding: 0;
-      display: none; z-index: 10;
+      display: none; z-index: 22;
     }
-    .fav-slot:hover .fav-remove.visible { display: block; }
+    body.icon-bar-right .fav-remove {
+      left: auto; right: -4px;
+    }
+    .fav-slot:hover .fav-remove.visible,
+    .fav-slot.renaming .fav-remove.visible { display: block; }
+
+    /* ── Fav label (hover-expand to show name) ── */
+    /* default: fav-bar は右側 → ラベルは左方向（main-content 側）へ展開 */
+    .fav-label {
+      position: absolute; top: 0;
+      right: 22px; left: auto;
+      height: 22px;
+      width: 0; overflow: hidden;
+      display: flex; align-items: center; gap: 4px;
+      padding: 0;
+      background: var(--bg1); border: 1px solid var(--bdr2);
+      border-right: none; border-radius: 4px 0 0 4px;
+      font-size: 11px; color: var(--tx0);
+      opacity: 0; pointer-events: none;
+      transition: width 150ms ease, opacity 100ms ease, padding 150ms ease;
+      white-space: nowrap;
+      z-index: 20;
+    }
+    .fav-slot:hover .fav-label,
+    .fav-slot.renaming .fav-label {
+      width: 120px; opacity: 1; padding: 0 6px;
+      pointer-events: auto;
+    }
+    .fav-label-text {
+      flex: 1; min-width: 0;
+      overflow: hidden; text-overflow: ellipsis;
+    }
+    .fav-label-text.empty { color: var(--tx2); font-style: italic; }
+    .fav-edit {
+      flex: 0 0 auto;
+      width: 16px; height: 16px;
+      display: flex; align-items: center; justify-content: center;
+      background: none; border: none; padding: 0;
+      color: var(--tx2); font-size: 11px; cursor: pointer;
+      border-radius: 3px;
+    }
+    .fav-edit:hover { color: var(--acc); background: var(--bg2); }
+    .fav-rename-input {
+      flex: 1; min-width: 0;
+      background: var(--bg2); border: 1px solid var(--acc);
+      color: var(--tx0); border-radius: 3px;
+      padding: 1px 4px; font-size: 11px;
+      outline: none;
+    }
+    /* icon-bar-right 時は fav-bar が左側 → ラベルは右方向（main-content 側）へ展開 */
+    body.icon-bar-right .fav-label {
+      left: 22px; right: auto;
+      border-left: none; border-right: 1px solid var(--bdr2);
+      border-radius: 0 4px 4px 0;
+    }
+    /* ── Drag & drop states ── */
+    .fav-slot.dragging .fav-btn { opacity: 0.35; }
+    .fav-slot.drop-target .fav-btn {
+      outline: 2px dashed var(--acc);
+      outline-offset: 1px;
+    }
+    .fav-ghost {
+      position: fixed; pointer-events: none; z-index: 9999;
+      width: 22px; height: 22px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 4px; border: 1px solid var(--acc);
+      background: var(--bg2); color: var(--acc);
+      font-size: 11px; font-weight: 700;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+    }
 
     /* ── Main content ── */
     .main-content {
@@ -640,14 +715,8 @@
   </button>
 </div>
 
-<!-- Fav bar -->
-<div class="fav-bar" id="fav-bar">
-  <div class="fav-slot"><button class="fav-btn" data-index="0">+</button><button class="fav-remove" data-index="0">×</button></div>
-  <div class="fav-slot"><button class="fav-btn" data-index="1">+</button><button class="fav-remove" data-index="1">×</button></div>
-  <div class="fav-slot"><button class="fav-btn" data-index="2">+</button><button class="fav-remove" data-index="2">×</button></div>
-  <div class="fav-slot"><button class="fav-btn" data-index="3">+</button><button class="fav-remove" data-index="3">×</button></div>
-  <div class="fav-slot"><button class="fav-btn" data-index="4">+</button><button class="fav-remove" data-index="4">×</button></div>
-</div>
+<!-- Fav bar (slots are rendered dynamically by sidepanel.js renderFavBar) -->
+<div class="fav-bar" id="fav-bar"></div>
 
 <!-- Main content -->
 <div class="main-content">
