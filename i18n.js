@@ -254,6 +254,10 @@ const TRANSLATIONS = {
     eventGroupTeaser: '活动预告',
     eventGroupActive: '举办中',
     eventGroupEnded:  '已结束',
+    // 予告から昇格したエントリ（本開催URL未確定でクリック不可）のツールチップ
+    eventPromotedHint: '请先在游戏内打开本活动页面，之后即可点击跳转（无法从预告自动推算正确链接）',
+    // イベントバナーの削除（×）ボタンの title
+    eventBannerDelTitle: '删除',
     // BP warning
     bpWarning: '⚠ BP不足，请在主面板中恢复BP。',
     // Support hint (info footer)

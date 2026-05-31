@@ -435,6 +435,15 @@
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     .active-event-name:hover { text-decoration: underline; }
+    /* 予告から昇格・本開催URL未確定のためクリック不可 */
+    .active-event-name-disabled {
+      color: var(--tx2);
+      font-weight: 600;
+      flex: 1 1 auto;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      cursor: not-allowed;
+      opacity: .7;
+    }
     .active-event-del {
       background: none; border: none; color: var(--tx2);
       cursor: pointer; font-size: 13px; padding: 0 1px;
@@ -467,6 +476,51 @@
     .event-group-active .active-event-name  { color: var(--tx0); }
     .event-group-ended .active-event-name   { color: var(--tx2); }
     .event-group-ended .active-event-period { color: var(--tx2); }
+
+    /* ── イベントバナー（mypage グローバルバナー由来）── */
+    .event-group-banners { display: flex; flex-direction: column; gap: 6px; }
+    .event-banner {
+      position: relative;
+      width: 100%;
+      border-radius: 6px;
+      overflow: hidden;
+      cursor: pointer;
+      line-height: 0;
+      background: var(--bg1, #1a1a1a);
+    }
+    .event-banner-img {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+    /* 開催期間: バナー左上基点・白縁黒字 */
+    .event-banner-period {
+      position: absolute;
+      top: 3px;
+      left: 4px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #000;
+      line-height: 1.2;
+      padding: 0 2px;
+      letter-spacing: .02em;
+      pointer-events: none;
+      text-shadow:
+        -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff,
+         0   -1px 0 #fff, 0    1px 0 #fff, -1px 0   0 #fff, 1px 0   0 #fff;
+    }
+    .event-banner-del {
+      position: absolute;
+      top: 2px; right: 2px;
+      width: 16px; height: 16px;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(0,0,0,.5); border: none; border-radius: 50%;
+      color: #fff; cursor: pointer; font-size: 11px; line-height: 1;
+      padding: 0;
+    }
+    .event-banner-del:hover { background: var(--red, #e05); }
+    /* 開催終了: グレーアウト */
+    .event-group-ended .event-banner-img { filter: grayscale(1); opacity: .55; }
 
     /* ── Host history tile grid ── */
     .host-groups { display: flex; flex-direction: column; gap: 2px; }

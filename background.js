@@ -146,4 +146,33 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     }).catch(() => {});
     return;
   }
+  // ── mypage グローバルバナー画像の base64 化 ──
+  // sidepanel が「未キャッシュ時のみ」依頼する EVENT_BANNER_FETCH を受けて取得する。
+  // （EVENT_BANNER_DETECTED は sidepanel が直接受信するため、ここでは中継も自動 fetch もしない）
+  if (message.type === 'EVENT_BANNER_FETCH') {
+    const path   = message.path;
+    const imgUrl = message.imgUrl;
+    if (!path || !imgUrl) return;
+    fetch(imgUrl).then(r => r.blob()).then(blob => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        chrome.runtime.sendMessage({
+          type:      'EVENT_BANNER_RESOLVED',
+          path,
+          imgUrl,
+          bannerSrc: reader.result,
+        }).catch(() => {});
+      };
+      reader.readAsDataURL(blob);
+    }).catch(() => {
+      // 失敗時は空 bannerSrc を返して pending 解除（URL 表示にフォールバック・次回再試行可）
+      chrome.runtime.sendMessage({
+        type:      'EVENT_BANNER_RESOLVED',
+        path,
+        imgUrl,
+        bannerSrc: '',
+      }).catch(() => {});
+    });
+    return;
+  }
 });

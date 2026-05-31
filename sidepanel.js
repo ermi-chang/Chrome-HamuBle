@@ -37,7 +37,12 @@ let hostHistory     = [];         // [{ questId, questType, treasureId, lastTime
 let questMeta       = {};         // { [questId]: { chapterName, limitedCount, maxLimitedCount, ... } }
 let hostHistoryDate = '';         // GBF日付文字列
 // 開催中／予告イベント。content.js が #event/.. または #teaser/.. を踏むたびに更新。periodEndMs 経過で自動除去。
+// （内部の期間/hostHistory連携レジストリ。ユーザー表示は eventBanners 側のバナーへ移行済み）
 let activeEvents    = {};         // { [eventName]: { eventName, title, periodText, periodEndMs, hash, lastSeenAt } }
+// mypage グローバルバナー由来のイベント表示ストア。path（=data-href, hash から # を除いた値）をキーにする。
+let eventBanners    = {};         // { [path]: { path, hash, bannerSrc, srcUrl, isTeaser, periodText, eventStartMs, eventEndMs, lastSeenAt } }
+// 画像取得（base64化）依頼中の path 集合（重複 fetch 依頼の抑制・セッション内のみ）
+const bannerFetchPending = new Set();
 let lastHostDetectKey = '';
 let lastHostDetectAt  = 0;
 let recentHostDecrementAt = {};   // { [questId]: timestamp }
@@ -862,16 +867,21 @@ chrome.runtime.onMessage.addListener((message) => {
   } else if (message.type === 'EVENT_INFO_DETECTED') {
     const k = String(message.eventName || '').trim();
     if (!k) return;
-    // #event/N 受信時、対応する "teaser:N" を削除してキー重複を防ぐ。
-    // Teaser から取得した eventStartMs/eventEndMs を引き継ぐ。
+    // 本開催イベント (#event/...) 受信時、同一タイトルの teaser / teaser 昇格エントリを統合削除する。
+    // teaser ID (#teaser/N) と本開催 event ID は一致しない場合があるため、ID ではなくタイトルで照合し、
+    // 本物の hash を持つエントリ 1 件へまとめる（重複バナー・遷移失敗の原因を断つ）。
+    // teaser から取得済みの eventStartMs/eventEndMs は本開催側へ引き継ぐ。
     if (!message.isTeaser) {
-      const numId = String(message.hash || '').match(/^#event\/(\d+)/)?.[1];
-      if (numId) {
-        const tk = `teaser:${numId}`;
-        if (activeEvents[tk]) {
-          if (!Number.isFinite(message.eventStartMs)) message.eventStartMs = activeEvents[tk].eventStartMs;
-          if (!Number.isFinite(message.eventEndMs))   message.eventEndMs   = activeEvents[tk].eventEndMs;
-          delete activeEvents[tk];
+      const incomingTitle = String(message.title || '').trim();
+      if (incomingTitle) {
+        for (const ek of Object.keys(activeEvents)) {
+          if (ek === k) continue;
+          const ee = activeEvents[ek];
+          if (!ee || !(ee.isTeaser || ee.promotedFromTeaser)) continue;
+          if (String(ee.title || '').trim() !== incomingTitle) continue;
+          if (!Number.isFinite(message.eventStartMs) && Number.isFinite(ee.eventStartMs)) message.eventStartMs = ee.eventStartMs;
+          if (!Number.isFinite(message.eventEndMs)   && Number.isFinite(ee.eventEndMs))   message.eventEndMs   = ee.eventEndMs;
+          delete activeEvents[ek];
         }
       }
     }
@@ -889,12 +899,66 @@ chrome.runtime.onMessage.addListener((message) => {
       eventStartMs: Number.isFinite(message.eventStartMs) ? message.eventStartMs : (existing?.eventStartMs ?? null),
       eventEndMs:   Number.isFinite(message.eventEndMs)   ? message.eventEndMs   : (existing?.eventEndMs   ?? null),
     };
+    // バナー表示（eventBanners）へ開催期間を反映。path = hash から # を除いた値で照合。
+    // mypage で未観測のイベントページ訪問ではバナーを新規作成しない（表示は mypage 由来のみ）。
+    const bp = (typeof message.hash === 'string' ? message.hash : '').replace(/^#/, '');
+    if (bp && eventBanners[bp]) {
+      const b = eventBanners[bp];
+      if (message.periodText) b.periodText = String(message.periodText);
+      if (Number.isFinite(message.eventStartMs)) b.eventStartMs = message.eventStartMs;
+      if (Number.isFinite(message.eventEndMs))   b.eventEndMs   = message.eventEndMs;
+      b.lastSeenAt = Date.now();
+    }
     pruneExpiredActiveEvents();
     // activeEvents 変動に同期して hostHistory 側の event エントリも掃除する
     //  (eventName 照合経路を即時反映するため)。
     pruneExpiredEventAdventHosts();
     saveHostHistory();
     if (activeTab === 'host-history') renderHostHistory();
+  } else if (message.type === 'EVENT_BANNER_DETECTED') {
+    // mypage グローバルバナー検出。path（=data-href）をキーに upsert。
+    const path = String(message.path || '').trim();
+    if (!path) return;
+    const now = Date.now();
+    let b = eventBanners[path];
+    const isNew = !b;
+    if (!b) {
+      b = eventBanners[path] = {
+        path, hash: '#' + path, bannerSrc: '', srcUrl: '',
+        isTeaser: !!message.isTeaser,
+        periodText: '', eventStartMs: null, eventEndMs: null,
+        lastSeenAt: now,
+      };
+    }
+    const teaserChanged = b.isTeaser !== !!message.isTeaser;
+    b.isTeaser = !!message.isTeaser;
+    b.hash = '#' + path;
+    b.lastSeenAt = now;
+    // 画像が base64 取得済みなら再 fetch しない（freeze）。lastSeenAt のみ更新。
+    // 未取得（新規／URL のまま）かつ未依頼のときだけ暫定 URL を立て background へ取得依頼する。
+    const cached = String(b.bannerSrc || '').startsWith('data:');
+    let visualChanged = isNew || teaserChanged;
+    if (!cached && !bannerFetchPending.has(path) && typeof message.imgUrl === 'string' && message.imgUrl) {
+      if (!b.bannerSrc) { b.bannerSrc = message.imgUrl; b.srcUrl = message.imgUrl; visualChanged = true; }
+      bannerFetchPending.add(path);
+      chrome.runtime.sendMessage({ type: 'EVENT_BANNER_FETCH', path, imgUrl: b.srcUrl }).catch(() => {});
+    }
+    saveHostHistory();
+    // 見た目が変わらない再観測（取得済みバナーの lastSeenAt 更新のみ）では再描画しない。
+    if (visualChanged && activeTab === 'host-history') renderHostHistory();
+  } else if (message.type === 'EVENT_BANNER_RESOLVED') {
+    // background が base64 dataURL 化した結果。最初に観測した画像 (srcUrl) のみ durable へ差し替え。
+    const path = String(message.path || '').trim();
+    const b = path ? eventBanners[path] : null;
+    bannerFetchPending.delete(path); // 成否に関わらず pending 解除
+    if (!b) return;
+    if (typeof message.bannerSrc === 'string' && message.bannerSrc
+        && message.imgUrl === b.srcUrl
+        && !String(b.bannerSrc || '').startsWith('data:')) {
+      b.bannerSrc = message.bannerSrc;
+      saveHostHistory();
+      if (activeTab === 'host-history') renderHostHistory();
+    }
   }
 });
 
@@ -1161,15 +1225,27 @@ function pruneExpiredActiveEvents() {
     // 1. Teaser: 開始時刻到達 → key を "teaser:N" から "N" に変えて開催中エントリへ昇格
     if (e.isTeaser) {
       if (Number.isFinite(e.periodEndMs) && e.periodEndMs <= now) {
+        const title  = String(e.title || '').trim();
+        // 既に同一タイトルの本開催エントリがあれば teaser は重複なので削除のみ（昇格しない）
+        const dupActive = title && Object.keys(activeEvents).some(ek =>
+          ek !== k && !activeEvents[ek].isTeaser &&
+          String(activeEvents[ek].title || '').trim() === title);
         const numId  = e.hash?.match(/^#teaser\/(\d+)/)?.[1];
         const newKey = numId || k;
         delete activeEvents[k];
-        if (!activeEvents[newKey]) {
+        // 昇格エントリは promotedFromTeaser を立てておき、後で本開催 (#event/...) を
+        // 検出した際にタイトル一致で本物の hash へ置換できるようにする。
+        // hash は本開催 URL を捏造せず、元の teaser hash (#teaser/N) を保持する。
+        //   teaser ID と本開催 event hash には法則性が無く (例: teaser 1172 ⇔ event
+        //   treasureraid172)、teaser ID から本開催 URL を導出できないため。
+        //   本開催ページ訪問時に EVENT_INFO_DETECTED のタイトル統合で本物 hash へ修復される。
+        if (!dupActive && !activeEvents[newKey]) {
           activeEvents[newKey] = {
             ...e,
-            isTeaser:    false,
+            isTeaser:           false,
+            promotedFromTeaser: true,
             periodEndMs: Number.isFinite(e.eventEndMs) ? e.eventEndMs : null,
-            hash:        numId ? `#event/${numId}` : e.hash,
+            hash:        e.hash,
             eventName:   newKey,
           };
         }
@@ -1323,11 +1399,12 @@ function migrateHostHistoryIfNeeded(raw) {
 
 async function loadHostHistory() {
   return new Promise(resolve => {
-    chrome.storage.local.get(['gbfRfHostHistory', 'gbfRfQuestMeta', 'gbfRfHostHistoryDate', 'gbfRfEnemyImgCache', 'gbfRfActiveEvents'], data => {
+    chrome.storage.local.get(['gbfRfHostHistory', 'gbfRfQuestMeta', 'gbfRfHostHistoryDate', 'gbfRfEnemyImgCache', 'gbfRfActiveEvents', 'gbfRfEventBanners'], data => {
       hostHistory     = migrateHostHistoryIfNeeded(data.gbfRfHostHistory || []);
       questMeta       = data.gbfRfQuestMeta       || {};
       hostHistoryDate = data.gbfRfHostHistoryDate  || '';
       activeEvents    = (data.gbfRfActiveEvents && typeof data.gbfRfActiveEvents === 'object') ? data.gbfRfActiveEvents : {};
+      eventBanners    = (data.gbfRfEventBanners && typeof data.gbfRfEventBanners === 'object') ? data.gbfRfEventBanners : {};
       // 後方互換: 旧形式（isTeaser フィールド未保存）の救済。eventName が teaser:NNN なら teaser として扱う。
       for (const e of Object.values(activeEvents)) {
         if (e && typeof e === 'object' && e.isTeaser === undefined) {
@@ -1349,6 +1426,7 @@ async function loadHostHistory() {
       let dirty = false;
       if (pruneExpiredEventAdventHosts()) dirty = true;
       if (pruneExpiredActiveEvents())     dirty = true;
+      if (pruneExpiredEventBanners())     dirty = true;
       if (pruneStaleEtcHosts())           dirty = true;
       // 既存ストレージの hell カウンタを dataid 単位に揃える（min 採用）
       if (migrateHellSharedLimited())     dirty = true;
@@ -1449,6 +1527,7 @@ function saveHostHistory() {
     gbfRfQuestMeta:       questMeta,
     gbfRfHostHistoryDate: hostHistoryDate,
     gbfRfActiveEvents:    activeEvents,
+    gbfRfEventBanners:    eventBanners,
   });
 }
 
@@ -1513,8 +1592,9 @@ function updateCategoryChipBadges(categoryClearState) {
 }
 
 // ── 開催中／予告イベント バナー HTML 生成 ──────────────
+// mypage グローバルバナー由来の eventBanners を画像で描画する。
 // 「ALL もしくは event カテゴリ選択中」のときだけ非空 HTML を返す。
-// 終了時刻 (periodEndMs) を過ぎたエントリは除外し、近い順にソート。
+// 群分け: isTeaser→開催前 / eventEndMs<=now→開催終了（グレーアウト）/ それ以外→開催中。
 function buildActiveEventsBannerHTML() {
   if (!settings.showEventBanner) return '';
   if (!shouldShowEventBanner()) return '';
@@ -1523,42 +1603,38 @@ function buildActiveEventsBannerHTML() {
   const teasers = [];
   const actives = [];
   const ended   = [];
-  for (const e of Object.values(activeEvents)) {
-    if (e.isTeaser) {
-      teasers.push(e);
-    } else if (e.isEnding) {
-      ended.push(e);
-    } else if (e.isRewardClaim) {
-      // 報酬受け取り期間中はフラグ優先で常に「終了」群に固定（eventEndMs が
-      // reward 期間終了日＝未来でも actives 群に戻さない）
-      ended.push(e);
+  for (const b of Object.values(eventBanners)) {
+    if (!b || !b.bannerSrc) continue;
+    if (b.isTeaser) {
+      teasers.push(b);
+    } else if (Number.isFinite(b.eventEndMs) && b.eventEndMs <= now) {
+      ended.push(b);
     } else {
-      // eventEndMs 優先。なければ periodEndMs（後方互換）
-      const endMs = Number.isFinite(e.eventEndMs) ? e.eventEndMs : e.periodEndMs;
-      if (!Number.isFinite(endMs) || endMs > now) actives.push(e);
-      else ended.push(e);
+      actives.push(b);
     }
   }
   if (teasers.length + actives.length + ended.length === 0) return '';
 
-  // teaser / active は締切が近い順、ended は終了が新しい順
-  teasers.sort((a, b) => (a.periodEndMs ?? Infinity) - (b.periodEndMs ?? Infinity));
-  actives.sort((a, b) => (a.periodEndMs ?? Infinity) - (b.periodEndMs ?? Infinity));
-  ended.sort((a, b)   => (b.periodEndMs ?? 0)        - (a.periodEndMs ?? 0));
+  // teaser / active は終了が近い順、ended は終了が新しい順（期間未取得は末尾）
+  teasers.sort((a, b) => (a.eventEndMs ?? Infinity) - (b.eventEndMs ?? Infinity));
+  actives.sort((a, b) => (a.eventEndMs ?? Infinity) - (b.eventEndMs ?? Infinity));
+  ended.sort((a, b)   => (b.eventEndMs ?? 0)        - (a.eventEndMs ?? 0));
 
-  const rowHTML = (e) => `
-    <div class="active-event-row">
-      <a class="active-event-name" href="#"
-         data-event-name="${esc(e.eventName)}"
-         data-hash="${esc(e.hash || '')}">${esc(e.title)}</a>
-      <span class="active-event-period">${esc(e.periodText)}</span>
-      <button class="active-event-del" data-event-name="${esc(e.eventName)}" title="削除">×</button>
+  const bannerHTML = (b) => {
+    const period = b.periodText
+      ? `<span class="event-banner-period">${esc(b.periodText)}</span>` : '';
+    return `
+    <div class="event-banner" data-path="${esc(b.path)}" data-hash="${esc(b.hash || '')}">
+      <img class="event-banner-img" src="${esc(b.bannerSrc)}" alt="">
+      ${period}
+      <button class="event-banner-del" data-path="${esc(b.path)}" title="${esc(t('eventBannerDelTitle'))}">×</button>
     </div>`;
+  };
 
   const groupHTML = (cls, labelKey, list) => list.length === 0 ? '' : `
     <div class="event-group ${cls}">
       <span class="event-group-label">${esc(t(labelKey))}</span>
-      <div class="event-group-rows">${list.map(rowHTML).join('')}</div>
+      <div class="event-group-banners">${list.map(bannerHTML).join('')}</div>
     </div>`;
 
   return `<div class="active-events">${
@@ -1570,12 +1646,28 @@ function buildActiveEventsBannerHTML() {
   }</div>`;
 }
 
+// ── 14日未観測のバナー（base64 キャッシュ含む）を削除 ──
+function pruneExpiredEventBanners() {
+  const now = Date.now();
+  const TTL = 14 * 24 * 60 * 60 * 1000;
+  let changed = false;
+  for (const k of Object.keys(eventBanners)) {
+    const b = eventBanners[k];
+    if (!b || !Number.isFinite(b.lastSeenAt) || (now - b.lastSeenAt) > TTL) {
+      delete eventBanners[k];
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 // ── マイクエスト レンダリング ──────────────────────────
 function renderHostHistory() {
   checkDailyReset();
   let dirty = false;
   if (pruneExpiredEventAdventHosts()) dirty = true;
   if (pruneExpiredActiveEvents())     dirty = true;
+  if (pruneExpiredEventBanners())     dirty = true;
   if (dirty) saveHostHistory();
   elHostDate.textContent = hostHistoryDate;
 
@@ -1766,31 +1858,27 @@ function renderHostHistory() {
   wireActiveEventClicks();
 }
 
-// バナー内イベント名クリック → 取得元 hash があればそれ、無ければ #event/{event_name}
+// バナークリック → data-hash（= #+path）へ遷移。× で eventBanners から削除。
 function wireActiveEventClicks() {
-  elList.querySelectorAll('.active-event-name').forEach(a => {
-    a.addEventListener('click', async (e) => {
-      e.preventDefault();
-      const name = a.dataset.eventName;
-      const hash = a.dataset.hash || '';
-      if (!name && !hash) return;
+  elList.querySelectorAll('.event-banner').forEach(card => {
+    card.addEventListener('click', async (e) => {
+      if (e.target.closest('.event-banner-del')) return; // × は別ハンドラ
+      const hash = card.dataset.hash || (card.dataset.path ? '#' + card.dataset.path : '');
+      if (!hash) return;
       const tab = await getGBFTab();
       if (!tab) return;
-      const targetUrl = hash
-        ? `https://game.granbluefantasy.jp/${hash}`
-        : `https://game.granbluefantasy.jp/#event/${name}`;
       try {
-        await chrome.tabs.update(tab.id, { url: targetUrl, active: true });
+        await chrome.tabs.update(tab.id, { url: `https://game.granbluefantasy.jp/${hash}`, active: true });
       } catch (err) {
-        console.error('Active event navigation error:', err);
+        console.error('Event banner navigation error:', err);
       }
     });
   });
-  elList.querySelectorAll('.active-event-del').forEach(btn => {
+  elList.querySelectorAll('.event-banner-del').forEach(btn => {
     btn.addEventListener('click', (ev) => {
       ev.stopPropagation();
-      const name = btn.dataset.eventName;
-      if (name) { delete activeEvents[name]; saveHostHistory(); renderHostHistory(); }
+      const path = btn.dataset.path;
+      if (path) { delete eventBanners[path]; saveHostHistory(); renderHostHistory(); }
     });
   });
 }
@@ -2055,6 +2143,7 @@ tplNameInput.addEventListener('keydown', (e) => {
     let dirty = false;
     if (pruneExpiredActiveEvents())     dirty = true;
     if (pruneExpiredEventAdventHosts()) dirty = true;
+    if (pruneExpiredEventBanners())     dirty = true;
     if (dirty) {
       saveHostHistory();
       if (activeTab === 'host-history') renderHostHistory();
