@@ -430,6 +430,27 @@
     }).catch(() => {});
   }
 
+  // ── mypage グローバルバナー読取り（読取り専用）──────────
+  // .prt-global-banner 内の各 .btn-global-banner[data-href] と .img-global-banner[src] を取得し、
+  // data-href が event/ または teaser/ で始まるものだけ EVENT_BANNER_DETECTED として送信する。
+  // バナーはランダムに切替わるが、sidepanel 側で既存エントリの画像は上書きしない（freeze）。
+  function tryReportEventBanners() {
+    if (!isContextValid()) return;
+    const btns = document.querySelectorAll('.prt-global-banner .btn-global-banner');
+    btns.forEach(btn => {
+      const path = (btn.dataset?.href || '').trim();
+      if (!/^(event|teaser)\//.test(path)) return;
+      const imgUrl = btn.querySelector('.img-global-banner')?.src || '';
+      if (!imgUrl) return;
+      chrome.runtime.sendMessage({
+        type:     'EVENT_BANNER_DETECTED',
+        path,
+        imgUrl,
+        isTeaser: /^teaser\//.test(path),
+      }).catch(() => {});
+    });
+  }
+
   // ── 難易度カテゴリ判定（自発クリック時のページ文脈から） ─
   // 戻り値: 'free' | 'event' | 'ul' | 'hl' | 'nm' | 'etc'
   function detectRaidCategory() {
@@ -726,6 +747,19 @@
     document.addEventListener('DOMContentLoaded', bootEventAdventPeriodCache, { once: true });
   } else {
     bootEventAdventPeriodCache();
+  }
+
+  // 初期ロード時に mypage グローバルバナーを一度読取る
+  function bootEventBanners() {
+    if (!isContextValid()) return;
+    if ((location.hash || '').indexOf('#mypage') !== 0 && !document.querySelector('.prt-global-banner')) return;
+    setTimeout(tryReportEventBanners, 600);
+    setTimeout(tryReportEventBanners, 1800);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', bootEventBanners, { once: true });
+  } else {
+    bootEventBanners();
   }
 
   // extra event タブが既にアクティブな状態で content script が注入されたケース。
@@ -1177,6 +1211,12 @@
     if (isEventOrTeaserHash(hash)) {
       setTimeout(tryReportEventInfo, 600);
       setTimeout(tryReportEventInfo, 1800);
+    }
+
+    // mypage グローバルバナー読取り（バナーは非同期描画されるため遅延 2 段）
+    if (hash.indexOf('#mypage') === 0 || document.querySelector('.prt-global-banner')) {
+      setTimeout(tryReportEventBanners, 600);
+      setTimeout(tryReportEventBanners, 1800);
     }
 
     // assist ページに来た場合に observer を再接続
