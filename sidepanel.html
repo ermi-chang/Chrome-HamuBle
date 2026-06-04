@@ -167,10 +167,175 @@
     }
 
     /* ── Tab-based visibility ── */
-    body:not(.tab-rescue)       .rescue-only { display: none !important; }
-    body:not(.tab-host-history) .host-only   { display: none !important; }
-    body:not(.tab-info)         .info-only   { display: none !important; }
-    body.tab-info .list { display: none !important; }
+    body:not(.tab-rescue)       .rescue-only    { display: none !important; }
+    body:not(.tab-host-history) .host-only      { display: none !important; }
+    body:not(.tab-info)         .info-only      { display: none !important; }
+    body:not(.tab-dashboard)    .dashboard-only { display: none !important; }
+    body.tab-info      .list { display: none !important; }
+    body.tab-dashboard .list { display: none !important; }
+
+    /* ── Dashboard ── */
+    .dashboard {
+      flex: 1; min-width: 0;
+      overflow-y: auto; overflow-x: hidden;
+      display: flex; flex-direction: column; gap: 8px;
+      padding: 8px 6px 12px;
+    }
+    .dash-section {
+      border: 1px solid var(--bdr);
+      border-radius: var(--r-sm);
+      background: var(--bg1);
+      padding: 8px;
+    }
+    .dash-section-title {
+      font-size: 11px; font-weight: 700; color: var(--acc);
+      letter-spacing: .04em; margin-bottom: 6px;
+    }
+    /* イベント告知セクションは .active-events 自身が枠を持つので二重枠にしない */
+    .dash-section-events { border: none; background: none; padding: 0; }
+    .dash-section-events .active-events { margin: 0; }
+    /* 今日の自発サマリー */
+    .dash-sum-total { font-size: 12px; color: var(--tx0); margin-bottom: 6px; }
+    .dash-sum-total-n { font-size: 16px; font-weight: 700; color: var(--acc); margin: 0 2px; }
+    .dash-sum-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+    .dash-sum-chip {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 2px 7px; border-radius: 10px;
+      background: var(--bg2); border: 1px solid var(--bdr);
+      font-size: 11px;
+    }
+    .dash-sum-cat { color: var(--tx1); }
+    .dash-sum-n { font-weight: 700; color: var(--tx0); }
+    .dash-sum-empty { font-size: 11px; color: var(--tx2); }
+    /* ドロップログ累計（アイコン化） */
+    .dash-drop-list { display: flex; flex-direction: column; gap: 3px; }
+    .dash-drop-row {
+      display: grid; grid-template-columns: 30px auto auto;
+      align-items: center; gap: 8px;
+      padding: 3px 4px;
+      border-bottom: 1px dashed var(--bdr);
+      font-size: 12px;
+    }
+    .dash-drop-row:last-child { border-bottom: none; }
+    .dash-drop-icon  { width: 30px; height: 30px; border-radius: 4px; object-fit: cover; background: var(--bg2); }
+    .dash-drop-count { color: var(--acc); font-weight: 700; min-width: 28px; text-align: left; }
+    .dash-drop-last  { color: var(--tx2); font-size: 10px; }
+    .dash-drop-empty { font-size: 11px; color: var(--tx2); }
+
+    /* 設定: ドロップウォッチ（アイコンチップ式） */
+    .setting-block { display: flex; flex-direction: column; gap: 6px; padding: 6px 0; border-top: 1px solid var(--bdr); }
+    .setting-block-head { display: flex; justify-content: space-between; align-items: center; }
+    .btn-drop-reset {
+      background: var(--bg2); border: 1px solid var(--bdr); color: var(--tx1);
+      border-radius: 4px; padding: 2px 8px; font-size: 11px; cursor: pointer;
+    }
+    .btn-drop-reset:hover { background: var(--bg1); color: var(--tx0); }
+    .drop-watch-chips {
+      display: flex; flex-wrap: wrap; gap: 5px;
+      align-items: center;
+    }
+    .drop-chip {
+      width: 48px; height: 48px;
+      padding: 0; border: 1px solid var(--bdr); border-radius: 6px;
+      background: var(--bg2);
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      overflow: hidden;
+    }
+    .drop-chip:hover { border-color: var(--red, #e05); }
+    .drop-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .drop-watch-input {
+      display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
+      padding: 4px;
+      background: var(--bg0);
+      border: 1px solid var(--bdr); border-radius: 4px;
+    }
+    .drop-watch-input input[type="text"] {
+      flex: 1; min-width: 0;
+      background: var(--bg2); color: var(--tx0);
+      border: 1px solid var(--bdr); border-radius: 3px;
+      font-size: 11px; padding: 3px 6px;
+    }
+    .drop-watch-input button {
+      background: var(--bg2); border: 1px solid var(--bdr); color: var(--tx1);
+      border-radius: 3px; padding: 2px 10px; font-size: 11px; cursor: pointer;
+    }
+    .drop-watch-input button:hover { background: var(--bg1); color: var(--tx0); }
+    .drop-watch-input-error {
+      flex-basis: 100%;
+      font-size: 10px; color: var(--red, #e05);
+    }
+    .drop-watch-input-error:empty { display: none; }
+
+    /* 最近観測ドロップ フッター（全タブ共通） */
+    .recent-drops-footer {
+      flex-shrink: 0;
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 8px;
+      border-top: 1px solid var(--bdr);
+      background: var(--bg1);
+      min-height: 54px;
+    }
+    .recent-drops-label {
+      flex-shrink: 0;
+      font-size: 10px; font-weight: 700; color: var(--tx2);
+      letter-spacing: .04em;
+    }
+    .recent-drops-chips {
+      flex: 1; min-width: 0;
+      display: flex; gap: 5px;
+      overflow-x: auto; overflow-y: hidden;
+      scrollbar-width: thin;
+    }
+    .recent-drops-chips::-webkit-scrollbar { height: 4px; }
+    .recent-drops-chips::-webkit-scrollbar-thumb { background: var(--bg2); border-radius: 2px; }
+    .recent-drop-chip {
+      position: relative;
+      flex: 0 0 auto;
+      width: 42px; height: 42px;
+      padding: 0; border: 1px solid var(--bdr); border-radius: 6px;
+      background: var(--bg2);
+      cursor: pointer;
+      overflow: visible;
+    }
+    .recent-drop-chip:hover { border-color: var(--acc); }
+    .recent-drop-chip.is-registered { cursor: default; opacity: .65; }
+    .recent-drop-chip.is-registered:hover { border-color: var(--bdr); }
+    .recent-drop-chip img {
+      width: 100%; height: 100%;
+      object-fit: cover;
+      border-radius: 3px; display: block;
+    }
+    .recent-drop-count {
+      position: absolute;
+      right: -4px; bottom: -4px;
+      background: var(--bg0); color: var(--acc);
+      font-size: 10px; font-weight: 700;
+      padding: 0 4px; border-radius: 7px;
+      border: 1px solid var(--bdr);
+      line-height: 1.4;
+    }
+    .recent-drop-check {
+      position: absolute;
+      top: -5px; right: -5px;
+      width: 14px; height: 14px;
+      background: var(--grn, #6c6); color: var(--bg0);
+      font-size: 9px; font-weight: 700;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      line-height: 1;
+    }
+    .recent-drops-empty {
+      font-size: 10px; color: var(--tx2);
+      flex: 1;
+    }
+    .recent-drops-chips:empty + .recent-drops-empty { display: inline; }
+    .recent-drops-chips:not(:empty) + .recent-drops-empty { display: none; }
+
+    /* ── Header ── */
+    .header { background: var(--bg2); padding: 8px 10px; border-bottom: 1px solid var(--bdr); flex-shrink: 0; }
+    .header-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; }
+    h1 { font-size: 13px; font-weight: 600; color: var(--acc); }
 
     /* ── Quick actions bar ── */
     .quick-bar { padding: 8px 10px; background: var(--bg1); border-bottom: 1px solid var(--bdr); flex-shrink: 0; }
@@ -750,7 +915,10 @@
   <button class="icon-btn" id="btn-home" data-i18n-title="navHomeDefault">
     <svg viewBox="0 0 24 24"><path d="M2 13l8-8 8 8"/><path d="M4 12v10h12V12"/><line x1="17" y1="5" x2="23" y2="5"/><line x1="20" y1="2" x2="20" y2="8"/></svg>
   </button>
-  <button class="icon-btn active" data-tab="rescue" data-i18n-title="navRescue">
+  <button class="icon-btn active" data-tab="dashboard" data-i18n-title="navDashboard">
+    <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+  </button>
+  <button class="icon-btn" data-tab="rescue" data-i18n-title="navRescue">
     <svg viewBox="0 0 24 24"><polygon points="22,3 2,3 10,12.46 10,19 14,21 14,12.46"/></svg>
   </button>
   <button class="icon-btn" data-tab="host-history" data-i18n-title="navHostHistory">
@@ -769,6 +937,15 @@
 
 <!-- Main content -->
 <div class="main-content">
+
+<!-- Header
+<div class="header">
+  <div class="header-top">
+    <h1>HamuBle</h1>
+  </div>
+
+
+</div> -->
 
 <!-- Settings (hidden) -->
 <div class="settings-panel" id="settings-panel">
@@ -805,10 +982,25 @@
     <span class="setting-lbl" data-i18n="settingsShowEventBanner">イベントバナー</span>
     <input type="checkbox" id="show-event-banner">
   </div>
+  <div class="setting-block setting-drop-watch">
+    <div class="setting-block-head">
+      <span class="setting-lbl" data-i18n="settingsDropWatchTitle">掉落监视</span>
+      <button class="btn-drop-reset" id="btn-drop-reset" data-i18n="settingsDropResetAll">清空累计</button>
+    </div>
+    <div class="drop-watch-chips" id="drop-watch-chips"></div>
+    <div class="drop-watch-input" id="drop-watch-input">
+      <input type="text" id="drop-watch-url" data-i18n-placeholder="settingsDropUrlPh" placeholder="粘贴 GBF 物品/武器图标 URL">
+      <button id="btn-drop-url-ok" data-i18n="settingsDropUrlOk">添加</button>
+      <div class="drop-watch-input-error" id="drop-watch-input-error"></div>
+    </div>
+  </div>
   <div class="setting-row" style="margin-top:4px; justify-content:flex-end;">
     <span id="version-label" style="font-size:10px; color:var(--tx2); letter-spacing:.04em;">HamuBle</span>
   </div>
 </div>
+
+<!-- Dashboard (dashboard only) -->
+<div class="dashboard dashboard-only" id="dashboard"></div>
 
 <!-- Rescue tab header (rescue only) -->
 <div class="rescue-header rescue-only">
@@ -960,6 +1152,13 @@
     </div>
     <div class="info-version-display" id="info-version-label"></div>
   </div>
+</div>
+
+<!-- Recent observed drops footer (全タブ共通・蓄積なし) -->
+<div class="recent-drops-footer" id="recent-drops-footer">
+  <span class="recent-drops-label" data-i18n="recentDropsLabel">本场</span>
+  <div class="recent-drops-chips" id="recent-drops-chips"></div>
+  <span class="recent-drops-empty" id="recent-drops-empty" data-i18n="recentDropsEmpty">打过一场战斗后这里会出现候选</span>
 </div>
 
 </div><!-- /.main-content -->
