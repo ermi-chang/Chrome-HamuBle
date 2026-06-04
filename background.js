@@ -130,6 +130,54 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     }).catch(() => {});
     return;
   }
+  // ── バトルリザルト ドロップ検出 ──
+  // content.js から DROP_LOGGED / RECENT_DROPS_DETECTED を受け、sidepanel へ中継する。
+  // 永続化（resultKey による dedupe + 累計加算）は sidepanel.js 側で行う。
+  if (message.type === 'DROP_LOGGED') {
+    chrome.runtime.sendMessage({
+      type:       'DROP_LOGGED',
+      resultKey:  message.resultKey,
+      hash:       message.hash,
+      hits:       message.hits,
+      detectedAt: message.detectedAt,
+    }).catch(() => {});
+    return;
+  }
+  if (message.type === 'RECENT_DROPS_DETECTED') {
+    chrome.runtime.sendMessage({
+      type:       'RECENT_DROPS_DETECTED',
+      resultKey:  message.resultKey,
+      drops:      message.drops,
+      detectedAt: message.detectedAt,
+    }).catch(() => {});
+    return;
+  }
+  // sidepanel が「未キャッシュ時のみ」依頼するドロップアイコン取得 (s/.jpg)
+  // EVENT_BANNER_FETCH と同じパターンで base64 化して返す。
+  if (message.type === 'DROP_ICON_FETCH') {
+    const { watchId, iconUrl } = message;
+    if (!watchId || !iconUrl) return;
+    fetch(iconUrl).then(r => r.blob()).then(blob => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        chrome.runtime.sendMessage({
+          type:       'DROP_ICON_RESOLVED',
+          watchId,
+          iconUrl,
+          iconCached: reader.result,
+        }).catch(() => {});
+      };
+      reader.readAsDataURL(blob);
+    }).catch(() => {
+      chrome.runtime.sendMessage({
+        type:       'DROP_ICON_RESOLVED',
+        watchId,
+        iconUrl,
+        iconCached: '',
+      }).catch(() => {});
+    });
+    return;
+  }
   if (message.type === 'EVENT_INFO_DETECTED') {
     chrome.runtime.sendMessage({
       type:           'EVENT_INFO_DETECTED',

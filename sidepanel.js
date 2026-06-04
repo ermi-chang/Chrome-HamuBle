@@ -24,6 +24,48 @@ const FAV_LONGPRESS_MS = 400;
 // favorites[i] = { url, title, customName, addedAt } | null
 let favorites   = new Array(FAV_SLOT_COUNT).fill(null);
 
+// ── ドロップログ（累計） ───────────────────────────────
+// 日次リセットされない長期記録。content.js がリザルト画面を読み取り、
+// gbfRfDropWatch（ウォッチリスト）の {category, itemId} 完全一致でカウントする。
+// 画像URL正規化は parseAssetUrl / buildIconUrl / buildMatchUrl を参照。
+let dropLog        = {};  // { [watchId]: { count, lastAt } }
+let dropWatch      = [];  // [{ id, name, category, itemId, iconCached, addedAt }]
+let seenResultKeys = {};  // { [resultKey]: detectedAt }  二重カウント防止（古いものは TTL で掃除）
+const SEEN_RESULT_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 日
+
+// 最近観測ドロップ（フッター用）。蓄積せず最新リザルトのみ session メモリに保持。
+// 新リザルトが入るたびに置換、サイドパネルを閉じれば失われる。storage 書き込みなし。
+let lastResultDrops = [];  // [{ category, itemId, count }]（表示 URL は描画時に s/.jpg を組み立て）
+
+// 既定ウォッチリスト確定値（Phase C v2）。ヒヒイロカネ + 刻の流砂 のみ。
+// iconCached は起動時に DROP_ICON_FETCH で埋める。
+const DEFAULT_DROP_WATCH = [
+  { id: 'item-evolution-20004', name: 'ヒヒイロカネ', category: 'item/evolution', itemId: '20004', iconCached: '', addedAt: 0 },
+  { id: 'item-article-215',     name: '刻の流砂',     category: 'item/article',   itemId: '215',   iconCached: '', addedAt: 0 },
+];
+
+// ── GBF 画像 CDN URL 正規化 ──────────────────────────
+// 入力 URL: https://prd-game-a-granbluefantasy.akamaized.net/assets/img/sp/assets/{category}/{m|s|b}/{id}.{jpg|png}
+// - category は 1 階層 (weapon, summon...) または 2 階層 (item/article, item/evolution...)
+// - 表示=s/.jpg、検索=m/.jpg、稀に登録される変換対象=b/.png
+// 内部キー = `{category}/{itemId}` の文字列。
+const ASSET_HOST = 'https://prd-game-a-granbluefantasy.akamaized.net/assets/img/sp/assets';
+function parseAssetUrl(u) {
+  if (typeof u !== 'string') return null;
+  const m = /\/sp\/assets\/(.+?)\/(m|s|b)\/(\d+)\.(jpg|png)(?:[?#]|$)/i.exec(u);
+  if (!m) return null;
+  return { category: m[1], size: m[2], itemId: m[3], ext: m[4].toLowerCase() };
+}
+function dropMatchKey(category, itemId) { return `${category}/${itemId}`; }
+function buildIconUrl(category, itemId) { return `${ASSET_HOST}/${category}/s/${itemId}.jpg`; }
+function buildMatchUrl(category, itemId) { return `${ASSET_HOST}/${category}/m/${itemId}.jpg`; }
+// watchId は category / を - に置換して URL/CSS-safe にしたもの
+function makeWatchId(category, itemId) {
+  return `${category.replace(/\//g, '-')}-${itemId}`;
+}
+// アイコン取得依頼中の watchId 集合（重複 fetch 抑制）
+const dropIconFetchPending = new Set();
+
 // ── BP 状態 ──────────────────────────────────────────
 // currentBP: GBF DOM から取れた現在の BP。null = 未取得（救援タブ非表示時など）
 // panelLockUntilBp: ロック中の閾値。currentBP が これ以上 になったら自動解除
@@ -31,8 +73,8 @@ let currentBP = null;
 let panelLockUntilBp = null;
 
 // ── マイクエスト状態 ────────────────────────────────────
-let activeTab       = 'rescue';   // 'rescue' | 'host-history' | 'info'
-let prevTab         = 'rescue';   // info タブ離脱先
+let activeTab       = 'dashboard'; // 'dashboard' | 'rescue' | 'host-history' | 'info'
+let prevTab         = 'dashboard'; // info タブ離脱先
 let hostHistory     = [];         // [{ questId, questType, treasureId, lastTimestamp, todayCount, raidCategory, eventPeriodEndMs?, eventName? }]
 let questMeta       = {};         // { [questId]: { chapterName, limitedCount, maxLimitedCount, ... } }
 let hostHistoryDate = '';         // GBF日付文字列
@@ -93,6 +135,7 @@ const elHostHistoryColsGroup = document.getElementById('host-history-cols-btns')
 const elHideDepleted    = document.getElementById('hide-depleted');
 const elShowEventBanner = document.getElementById('show-event-banner');
 const elIconBar   = document.getElementById('icon-bar');
+const elDashboard = document.getElementById('dashboard');
 const elHostDate      = document.getElementById('host-date');
 const btnClearHistory = document.getElementById('btn-clear-history');
 const elHostCategoryBar = document.getElementById('host-category-bar');
@@ -211,7 +254,7 @@ document.getElementById('lang-btns').addEventListener('click', e => {
   updateLangPicker(lang);
   saveAll();
   if (activeTab === 'rescue') renderFiltered();
-  else if (activeTab === 'host-history') renderHostHistory();
+  else refreshHostViews();
 });
 
 function getHostCategoryFilters() {
@@ -638,7 +681,7 @@ chrome.runtime.onMessage.addListener((message) => {
       }
       recentHostDecrementAt[message.questId] = now;
       saveHostHistory();
-      if (activeTab === 'host-history') renderHostHistory();
+      refreshHostViews();
       return;
     }
 
@@ -719,7 +762,7 @@ chrome.runtime.onMessage.addListener((message) => {
     recentHostDecrementAt[message.questId] = now;
     pruneExpiredEventAdventHosts();
     saveHostHistory();
-    if (activeTab === 'host-history') renderHostHistory();
+    refreshHostViews();
   } else if (message.type === 'QUEST_META_UPDATED') {
     const entries = message.questMeta || [];
     const now = Date.now();
@@ -784,7 +827,7 @@ chrome.runtime.onMessage.addListener((message) => {
       }
     }
     saveHostHistory();
-    if (activeTab === 'host-history') renderHostHistory();
+    refreshHostViews();
   } else if (message.type === 'HELL_QUEST_CONSUMED') {
     // Hell は PT選択 (#quest/supporter) OK + hashchange 離脱で確定発火。
     // questId は content.js 側で合成された `hell_<dataId>_<dataGroup>`。
@@ -856,13 +899,13 @@ chrome.runtime.onMessage.addListener((message) => {
 
     recentHostDecrementAt[qid] = now;
     saveHostHistory();
-    if (activeTab === 'host-history') renderHostHistory();
+    refreshHostViews();
   } else if (message.type === 'ENEMY_IMG_RESOLVED') {
     if (message.questId && message.thumbnailSrc) {
       if (!questMeta[message.questId]) questMeta[message.questId] = {};
       questMeta[message.questId].enemyImgSrc = message.thumbnailSrc;
       saveHostHistory();
-      if (activeTab === 'host-history') renderHostHistory();
+      refreshHostViews();
     }
   } else if (message.type === 'EVENT_INFO_DETECTED') {
     const k = String(message.eventName || '').trim();
@@ -914,7 +957,7 @@ chrome.runtime.onMessage.addListener((message) => {
     //  (eventName 照合経路を即時反映するため)。
     pruneExpiredEventAdventHosts();
     saveHostHistory();
-    if (activeTab === 'host-history') renderHostHistory();
+    refreshHostViews();
   } else if (message.type === 'EVENT_BANNER_DETECTED') {
     // mypage グローバルバナー検出。path（=data-href）をキーに upsert。
     const path = String(message.path || '').trim();
@@ -945,7 +988,48 @@ chrome.runtime.onMessage.addListener((message) => {
     }
     saveHostHistory();
     // 見た目が変わらない再観測（取得済みバナーの lastSeenAt 更新のみ）では再描画しない。
-    if (visualChanged && activeTab === 'host-history') renderHostHistory();
+    if (visualChanged) refreshHostViews();
+  } else if (message.type === 'DROP_LOGGED') {
+    // content.js が検出したリザルト画面ドロップを累計に加算する。
+    // resultKey で永続 dedupe（content.js 側の session 内 dedupe を再起動跨ぎでも維持）。
+    const key  = String(message.resultKey || '');
+    const hits = Array.isArray(message.hits) ? message.hits : [];
+    if (!key || hits.length === 0) return;
+    if (seenResultKeys[key]) return; // 既に集計済み
+    seenResultKeys[key] = Number.isFinite(message.detectedAt) ? message.detectedAt : Date.now();
+    const now = Date.now();
+    for (const h of hits) {
+      const wid = String(h.watchId || '');
+      if (!wid) continue;
+      const cnt = Number.isFinite(h.count) ? Math.max(0, h.count) : 0;
+      if (cnt === 0) continue;
+      const cur = dropLog[wid] || { count: 0, lastAt: 0 };
+      cur.count  = (cur.count || 0) + cnt;
+      cur.lastAt = now;
+      dropLog[wid] = cur;
+    }
+    chrome.storage.local.set({ gbfRfDropLog: dropLog, gbfRfSeenResultKeys: seenResultKeys });
+    if (activeTab === 'dashboard') renderDashboard();
+  } else if (message.type === 'RECENT_DROPS_DETECTED') {
+    // 直近 1 リザルト分の全ドロップ。蓄積せず置換のみ。storage 書き込みなし。
+    // 表示用 URL（s/.jpg）は描画時に buildIconUrl() で組み立てる。
+    const drops = Array.isArray(message.drops) ? message.drops : [];
+    lastResultDrops = drops.filter(d => d && d.category && d.itemId);
+    renderRecentDropsFooter();
+  } else if (message.type === 'DROP_ICON_RESOLVED') {
+    // background が base64 dataURL 化した結果を gbfRfDropWatch[i].iconCached に焼き付け。
+    const wid = String(message.watchId || '');
+    dropIconFetchPending.delete(wid);
+    if (!wid) return;
+    const entry = dropWatch.find(w => w.id === wid);
+    if (!entry) return;
+    if (typeof message.iconCached === 'string' && message.iconCached) {
+      entry.iconCached = message.iconCached;
+      saveDropWatch();
+      // 設定パネル・ダッシュボード・フッターを再描画してアイコン即時反映
+      renderDropWatchEditor();
+      if (activeTab === 'dashboard') renderDashboard();
+    }
   } else if (message.type === 'EVENT_BANNER_RESOLVED') {
     // background が base64 dataURL 化した結果。最初に観測した画像 (srcUrl) のみ durable へ差し替え。
     const path = String(message.path || '').trim();
@@ -957,7 +1041,7 @@ chrome.runtime.onMessage.addListener((message) => {
         && !String(b.bannerSrc || '').startsWith('data:')) {
       b.bannerSrc = message.bannerSrc;
       saveHostHistory();
-      if (activeTab === 'host-history') renderHostHistory();
+      refreshHostViews();
     }
   }
 });
@@ -1399,7 +1483,35 @@ function migrateHostHistoryIfNeeded(raw) {
 
 async function loadHostHistory() {
   return new Promise(resolve => {
-    chrome.storage.local.get(['gbfRfHostHistory', 'gbfRfQuestMeta', 'gbfRfHostHistoryDate', 'gbfRfEnemyImgCache', 'gbfRfActiveEvents', 'gbfRfEventBanners'], data => {
+    chrome.storage.local.get(['gbfRfHostHistory', 'gbfRfQuestMeta', 'gbfRfHostHistoryDate', 'gbfRfEnemyImgCache', 'gbfRfActiveEvents', 'gbfRfEventBanners', 'gbfRfDropLog', 'gbfRfDropWatch', 'gbfRfSeenResultKeys'], data => {
+      // ドロップログ（累計）と ウォッチリスト
+      dropLog        = (data.gbfRfDropLog && typeof data.gbfRfDropLog === 'object') ? data.gbfRfDropLog : {};
+      seenResultKeys = (data.gbfRfSeenResultKeys && typeof data.gbfRfSeenResultKeys === 'object') ? data.gbfRfSeenResultKeys : {};
+
+      // ウォッチリストの形式チェック・マイグレーション
+      const rawWatch = Array.isArray(data.gbfRfDropWatch) ? data.gbfRfDropWatch : null;
+      // 旧形式（patterns/itemIds/labelKey/enabled を持つ）を検出したら全置換し dropLog もリセット
+      const isLegacyFormat = rawWatch && rawWatch.some(w =>
+        w && (Array.isArray(w.patterns) || Array.isArray(w.itemIds) || 'labelKey' in w || 'enabled' in w)
+      );
+      if (!rawWatch || isLegacyFormat) {
+        dropWatch = DEFAULT_DROP_WATCH.map(w => ({ ...w, addedAt: Date.now() }));
+        dropLog = {};
+        chrome.storage.local.set({ gbfRfDropWatch: dropWatch, gbfRfDropLog: dropLog });
+      } else {
+        dropWatch = rawWatch;
+      }
+
+      // 古い seenResultKeys を掃除
+      const cutoff = Date.now() - SEEN_RESULT_TTL_MS;
+      let prunedKeys = false;
+      for (const k of Object.keys(seenResultKeys)) {
+        if (!Number.isFinite(seenResultKeys[k]) || seenResultKeys[k] < cutoff) {
+          delete seenResultKeys[k];
+          prunedKeys = true;
+        }
+      }
+      if (prunedKeys) chrome.storage.local.set({ gbfRfSeenResultKeys: seenResultKeys });
       hostHistory     = migrateHostHistoryIfNeeded(data.gbfRfHostHistory || []);
       questMeta       = data.gbfRfQuestMeta       || {};
       hostHistoryDate = data.gbfRfHostHistoryDate  || '';
@@ -1558,7 +1670,7 @@ function switchTab(tab) {
   elIconBar.querySelectorAll('.icon-btn').forEach(b =>
     b.classList.toggle('active', b.dataset.tab === tab)
   );
-  document.body.classList.remove('tab-rescue', 'tab-host-history', 'tab-info');
+  document.body.classList.remove('tab-dashboard', 'tab-rescue', 'tab-host-history', 'tab-info');
   document.body.classList.add(`tab-${tab}`);
   if (tab === 'rescue') {
     load(false);
@@ -1567,10 +1679,38 @@ function switchTab(tab) {
     // タブ離脱時に解除する。救援に戻る際は load() → evaluateBpLock() で再判定される。
     unlockPanel();
     renderHostHistory();
+  } else if (tab === 'dashboard') {
+    unlockPanel();
+    renderDashboard();
   } else {
     unlockPanel();
   }
   // info タブは静的コンテンツのみのため再描画不要
+}
+
+// host/event データ更新時に、現在表示中のビュー（マイクエスト or ダッシュボード）を再描画する。
+// イベントバナーはダッシュボードへ移設済みのため、両ビューを一括ハンドリングする。
+function refreshHostViews() {
+  if (activeTab === 'host-history') renderHostHistory();
+  else if (activeTab === 'dashboard') renderDashboard();
+}
+
+// ── カテゴリ共通ヘルパ（マイクエスト / ダッシュボードで共用） ──
+const CAT_ORDER = ['event', 'pro', 'nm', 'hl', 'ul', 'free', 'etc'];
+function catLabel(cat) {
+  switch (cat) {
+    case 'event': return t('catLabelEvent');
+    case 'pro':   return 'PRO';
+    case 'nm':    return 'NORMAL';
+    case 'hl':    return 'HIGH LEVEL';
+    case 'ul':    return 'UNLIMITED';
+    case 'free':  return t('catLabelFree');
+    default:      return t('catLabelOther');
+  }
+}
+// rec.raidCategory → questMeta → 'etc' の優先でカテゴリ解決
+function resolveCat(rec) {
+  return rec.raidCategory || questMeta[rec.questId]?.raidCategory || 'etc';
 }
 
 // ── マイクエスト カテゴリフィルタ判定 ──────────────────
@@ -1671,9 +1811,7 @@ function renderHostHistory() {
   if (dirty) saveHostHistory();
   elHostDate.textContent = hostHistoryDate;
 
-  // rec.raidCategory → questMeta → 'etc' の優先でカテゴリ解決
-  const resolveCat = (rec) =>
-    rec.raidCategory || questMeta[rec.questId]?.raidCategory || 'etc';
+  // resolveCat / CAT_ORDER / catLabel はモジュール先頭の共通ヘルパを使用（ダッシュボードと共用）
 
   // 1エントリが depleted（残り自発回数 0）かを判定。PRO は proQuestSkip、それ以外は limitedCount。
   // Hell は max 常に n1 と同値仕様 (0/0 を許容) のため、max>0 ガードを外し remaining===0 で判定する。
@@ -1689,13 +1827,6 @@ function renderHostHistory() {
     const remaining = isPro ? meta.proQuestSkip    : meta.limitedCount;
     const hasLimit  = typeof max === 'number' && max > 0;
     return hasLimit && typeof remaining === 'number' && remaining <= 0;
-  };
-
-  // カテゴリ表示順（.cat-chip 並びに準拠）と見出しラベル
-  const CAT_ORDER = ['event', 'pro', 'nm', 'hl', 'ul', 'free', 'etc'];
-  const CAT_LABEL = {
-    event: t('catLabelEvent'), pro: 'PRO', nm: 'NORMAL', hl: 'HIGH LEVEL', ul: 'UNLIMITED',
-    free: t('catLabelFree'), etc: t('catLabelOther'),
   };
 
   // カテゴリごとに「登録あり & 全て depleted」＝クリア状態を判定。
@@ -1722,14 +1853,11 @@ function renderHostHistory() {
     }))
     .sort((a, b) => b.lastTimestamp - a.lastTimestamp);
 
-  const eventBannerHTML = buildActiveEventsBannerHTML();
-
   if (entries.length === 0) {
     const msg = hostHistory.length === 0
       ? t('hostNoQuests')
       : t('hostNoCatQuests');
-    setListHTML(`${eventBannerHTML}<div class="state"><div class="ico">📋</div><p>${msg}</p></div>`);
-    wireActiveEventClicks();
+    setListHTML(`<div class="state"><div class="ico">📋</div><p>${msg}</p></div>`);
     return;
   }
 
@@ -1796,21 +1924,14 @@ function renderHostHistory() {
 
   // カテゴリ単位でグルーピング → 定義順にセクション描画（空カテゴリ & 全自発済みカテゴリはスキップ）
   // hideDepleted=OFF の場合は全自発済みカテゴリも表示する
-  // event カテゴリの直前には開催中イベントバナーを差し込む（event グループが空 / 全自発済みでもバナーは出す）
-  let bannerEmitted = false;
+  // （イベント告知バナーはダッシュボードへ移設済み）
   const sections = CAT_ORDER.map(cat => {
-    // event は他カテゴリより先にバナーだけ先取りする（hideDepleted で全自発済みでも出す）
-    let banner = '';
-    if (cat === 'event' && !bannerEmitted) {
-      banner = eventBannerHTML;
-      bannerEmitted = true;
-    }
-    if (settings.hideDepleted && categoryClearState[cat]) return banner;
+    if (settings.hideDepleted && categoryClearState[cat]) return '';
     const group = entries.filter(e => (e.raidCategory || 'etc') === cat);
-    if (group.length === 0) return banner;  // event 空でもバナーだけ返す
-    const header = `<div class="host-group-header host-cat-${esc(cat)}"><span class="host-group-label">(${esc(CAT_LABEL[cat])})</span><span class="host-group-line"></span></div>`;
+    if (group.length === 0) return '';
+    const header = `<div class="host-group-header host-cat-${esc(cat)}"><span class="host-group-label">(${esc(catLabel(cat))})</span><span class="host-group-line"></span></div>`;
     const grid = `<div class="host-grid">${group.map(renderTile).join('')}</div>`;
-    return `${banner}<div class="host-group">${header}${grid}</div>`;
+    return `<div class="host-group">${header}${grid}</div>`;
   }).join('');
 
   setListHTML(`<div class="host-groups">${sections}</div>`);
@@ -1854,13 +1975,13 @@ function renderHostHistory() {
       renderHostHistory();
     });
   });
-
-  wireActiveEventClicks();
 }
 
 // バナークリック → data-hash（= #+path）へ遷移。× で eventBanners から削除。
-function wireActiveEventClicks() {
-  elList.querySelectorAll('.event-banner').forEach(card => {
+// root はバナーを内包する要素（ダッシュボード領域）。
+function wireActiveEventClicks(root) {
+  if (!root) return;
+  root.querySelectorAll('.event-banner').forEach(card => {
     card.addEventListener('click', async (e) => {
       if (e.target.closest('.event-banner-del')) return; // × は別ハンドラ
       const hash = card.dataset.hash || (card.dataset.path ? '#' + card.dataset.path : '');
@@ -1874,13 +1995,92 @@ function wireActiveEventClicks() {
       }
     });
   });
-  elList.querySelectorAll('.event-banner-del').forEach(btn => {
+  root.querySelectorAll('.event-banner-del').forEach(btn => {
     btn.addEventListener('click', (ev) => {
       ev.stopPropagation();
       const path = btn.dataset.path;
-      if (path) { delete eventBanners[path]; saveHostHistory(); renderHostHistory(); }
+      if (path) { delete eventBanners[path]; saveHostHistory(); renderDashboard(); }
     });
   });
+}
+
+// ── 今日の自発サマリー HTML 生成 ──────────────────────
+// hostHistory を CAT_ORDER 順に集計し、本日合計 + カテゴリ別内訳を返す。
+function buildHostSummaryHTML() {
+  const counts = {};
+  let total = 0;
+  for (const rec of hostHistory) {
+    const cat = resolveCat(rec);
+    const c   = rec.todayCount || 0;
+    counts[cat] = (counts[cat] || 0) + c;
+    total += c;
+  }
+  const chips = CAT_ORDER
+    .filter(cat => (counts[cat] || 0) > 0)
+    .map(cat => `<span class="dash-sum-chip host-cat-${esc(cat)}"><span class="dash-sum-cat">${esc(catLabel(cat))}</span><span class="dash-sum-n">${counts[cat]}</span></span>`)
+    .join('');
+  return `
+    <div class="dash-section dash-summary">
+      <div class="dash-section-title">${esc(t('dashHostSummaryTitle'))}</div>
+      <div class="dash-sum-total">${esc(t('dashHostTotalPre'))}<span class="dash-sum-total-n">${total}</span>${esc(t('dashHostTotalPost'))}</div>
+      <div class="dash-sum-chips">${chips || `<span class="dash-sum-empty">${esc(t('dashHostEmpty'))}</span>`}</div>
+    </div>`;
+}
+
+// ── ドロップログ（累計）HTML 生成 ──────────────────────
+// ウォッチリストの順序で表示。enabled=false や count=0 のエントリは表示しない。
+// 表示名は labelKey の i18n 優先、無ければ name。
+function buildDropLogHTML() {
+  const rows = [];
+  for (const w of dropWatch) {
+    if (!w) continue;
+    const rec = dropLog[w.id];
+    const count = rec?.count || 0;
+    if (count === 0) continue;
+    const lastAt = rec?.lastAt ? new Date(rec.lastAt) : null;
+    const dateStr = lastAt
+      ? `${pad(lastAt.getMonth() + 1)}-${pad(lastAt.getDate())}`
+      : '';
+    const iconSrc = w.iconCached || buildIconUrl(w.category, w.itemId);
+    const label   = w.name || `${w.category}/${w.itemId}`;
+    rows.push(`
+      <div class="dash-drop-row" title="${esc(label)}">
+        <img class="dash-drop-icon" src="${esc(iconSrc)}" alt="" loading="lazy" decoding="async">
+        <span class="dash-drop-count">×${count}</span>
+        <span class="dash-drop-last">${esc(dateStr)}</span>
+      </div>`);
+  }
+  return `
+    <div class="dash-section">
+      <div class="dash-section-title">${esc(t('dashDropLogTitle'))}</div>
+      ${rows.length > 0
+        ? `<div class="dash-drop-list">${rows.join('')}</div>`
+        : `<div class="dash-drop-empty">${esc(t('dashDropEmpty'))}</div>`}
+    </div>`;
+}
+
+// ── ダッシュボード レンダリング ────────────────────────
+function renderDashboard() {
+  if (!elDashboard) return;
+  checkDailyReset();
+  let dirty = false;
+  if (pruneExpiredEventAdventHosts()) dirty = true;
+  if (pruneExpiredActiveEvents())     dirty = true;
+  if (pruneExpiredEventBanners())     dirty = true;
+  if (dirty) saveHostHistory();
+
+  const summaryHTML = buildHostSummaryHTML();
+  const dropHTML    = buildDropLogHTML();
+  const eventsHTML  = buildActiveEventsBannerHTML();
+  const eventsSection = eventsHTML
+    ? `<div class="dash-section dash-section-events">
+         <div class="dash-section-title">${esc(t('dashEventsTitle'))}</div>
+         ${eventsHTML}
+       </div>`
+    : '';
+
+  elDashboard.innerHTML = `${summaryHTML}${eventsSection}${dropHTML}`;
+  wireActiveEventClicks(elDashboard);
 }
 
 // ── Hell skip プルダウン HTML 生成 ────────────────────
@@ -2022,14 +2222,14 @@ if (elHostCategoryBar) {
     settings.hostCategoryFilters = cur;
     applyHostCategoryFilter();
     saveAll();
-    if (activeTab === 'host-history') renderHostHistory();
+    refreshHostViews();
   });
 }
 
 // ── アイコンバー位置 / カラム数切替 ──────────────────────────────
 [
   { id: 'icon-bar-pos-btns',      apply: applyIconBarPos },
-  { id: 'host-history-cols-btns', apply: () => { applyHostHistoryCols(); if (activeTab === 'host-history') renderHostHistory(); } },
+  { id: 'host-history-cols-btns', apply: () => { applyHostHistoryCols(); if (activeTab === 'host-history') renderHostHistory(); } },  // cols はマイクエスト専用
 ].forEach(({ id, apply }) => {
   document.getElementById(id).addEventListener('click', e => {
     const pill = e.target.closest('.pill[data-value]');
@@ -2054,7 +2254,196 @@ elShowEventBanner.addEventListener('change', () => {
 btnSettings.addEventListener('click', () => {
   settingsPanel.classList.toggle('open');
   btnSettings.classList.toggle('active', settingsPanel.classList.contains('open'));
+  if (settingsPanel.classList.contains('open')) renderDropWatchEditor();
 });
+
+// ── ドロップウォッチ編集 UI（アイコンチップ式 + 常設URL入力） ───────
+// 追加ルート: ①フッター「最近観測ドロップ」のチップクリック ②設定パネル下部の URL 入力欄
+const elDropWatchChips = document.getElementById('drop-watch-chips');
+const elDropWatchUrl   = document.getElementById('drop-watch-url');
+const btnDropUrlOk     = document.getElementById('btn-drop-url-ok');
+const elDropWatchErr   = document.getElementById('drop-watch-input-error');
+const btnDropReset     = document.getElementById('btn-drop-reset');
+
+function saveDropWatch() {
+  chrome.storage.local.set({ gbfRfDropWatch: dropWatch });
+}
+
+// 同 (category, itemId) が既に登録されているか
+function findWatchByKey(category, itemId) {
+  return dropWatch.find(w => w.category === category && String(w.itemId) === String(itemId));
+}
+
+// 未キャッシュのアイコンを background に取りに行く。pending Set で重複抑制。
+function ensureDropIconsCached() {
+  for (const w of dropWatch) {
+    if (!w || w.iconCached) continue;
+    if (dropIconFetchPending.has(w.id)) continue;
+    const url = buildIconUrl(w.category, w.itemId);
+    dropIconFetchPending.add(w.id);
+    chrome.runtime.sendMessage({ type: 'DROP_ICON_FETCH', watchId: w.id, iconUrl: url })
+      .catch(() => { dropIconFetchPending.delete(w.id); });
+  }
+}
+
+// 設定 URL 入力欄経由: 任意の m/.jpg | s/.jpg | b/.png URL からウォッチ追加。
+// 不正 URL のみエラー、重複は silent no-op。
+function addDropWatchFromUrl(url) {
+  const p = parseAssetUrl(url);
+  if (!p) return { ok: false, reason: 'invalid' };
+  if (findWatchByKey(p.category, p.itemId)) return { ok: false, reason: 'dup' };
+  dropWatch.push({
+    id:         makeWatchId(p.category, p.itemId),
+    name:       '',
+    category:   p.category,
+    itemId:     p.itemId,
+    iconCached: '',
+    addedAt:    Date.now(),
+  });
+  saveDropWatch();
+  ensureDropIconsCached();
+  return { ok: true };
+}
+
+// フッターチップ経由: content.js が観測した (category, itemId) から追加。
+// 表示用 s/.jpg は描画時に組み立て。重複は silent no-op。
+function addDropWatchFromObserved(category, itemId) {
+  if (!category || !itemId) return { ok: false, reason: 'invalid' };
+  if (findWatchByKey(category, itemId)) return { ok: false, reason: 'dup' };
+  dropWatch.push({
+    id:         makeWatchId(category, itemId),
+    name:       '',
+    category,
+    itemId:     String(itemId),
+    iconCached: '',
+    addedAt:    Date.now(),
+  });
+  saveDropWatch();
+  ensureDropIconsCached();
+  return { ok: true };
+}
+
+function renderDropWatchEditor() {
+  if (!elDropWatchChips) return;
+  if (dropWatch.length === 0) {
+    elDropWatchChips.innerHTML = '';
+    return;
+  }
+  const chipsHTML = dropWatch.map((w, i) => {
+    const iconSrc = w.iconCached || buildIconUrl(w.category, w.itemId);
+    const label   = w.name || `${w.category}/${w.itemId}`;
+    return `<button class="drop-chip" data-index="${i}" title="${esc(label)} — ${esc(t('settingsDropChipDelTitle'))}">
+      <img src="${esc(iconSrc)}" alt="" loading="lazy" decoding="async">
+    </button>`;
+  }).join('');
+  elDropWatchChips.innerHTML = chipsHTML;
+
+  elDropWatchChips.querySelectorAll('.drop-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const idx = parseInt(chip.dataset.index, 10);
+      if (!Number.isInteger(idx)) return;
+      const removed = dropWatch[idx];
+      dropWatch.splice(idx, 1);
+      // 累計ログから該当 watchId を削除（ダッシュボードから消える）
+      if (removed && dropLog[removed.id]) {
+        delete dropLog[removed.id];
+        chrome.storage.local.set({ gbfRfDropLog: dropLog });
+      }
+      saveDropWatch();
+      renderDropWatchEditor();
+      if (activeTab === 'dashboard') renderDashboard();
+      renderRecentDropsFooter();
+    });
+  });
+}
+
+// URL 入力欄ハンドラ（常設表示）
+function submitDropWatchUrl() {
+  const url = elDropWatchUrl?.value?.trim() || '';
+  if (!url) return;
+  const r = addDropWatchFromUrl(url);
+  if (r.ok || r.reason === 'dup') {
+    if (elDropWatchUrl) elDropWatchUrl.value = '';
+    if (elDropWatchErr) elDropWatchErr.textContent = '';
+    renderDropWatchEditor();
+    renderRecentDropsFooter();
+    if (activeTab === 'dashboard') renderDashboard();
+  } else {
+    if (elDropWatchErr) elDropWatchErr.textContent = t('settingsDropUrlErrInvalid');
+  }
+}
+if (btnDropUrlOk) btnDropUrlOk.addEventListener('click', submitDropWatchUrl);
+if (elDropWatchUrl) {
+  elDropWatchUrl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); submitDropWatchUrl(); }
+  });
+  elDropWatchUrl.addEventListener('input', () => {
+    // 入力中はエラー文をクリアして再入力しやすく
+    if (elDropWatchErr && elDropWatchErr.textContent) elDropWatchErr.textContent = '';
+  });
+}
+
+if (btnDropReset) {
+  btnDropReset.addEventListener('click', () => {
+    if (!confirm(t('settingsDropResetConfirm'))) return;
+    dropLog = {};
+    seenResultKeys = {};
+    chrome.storage.local.set({ gbfRfDropLog: dropLog, gbfRfSeenResultKeys: seenResultKeys });
+    if (activeTab === 'dashboard') renderDashboard();
+    renderRecentDropsFooter();
+  });
+}
+
+// ── 最近観測ドロップ フッター ────────────────────────
+const elRecentDropsFooter = document.getElementById('recent-drops-footer');
+const elRecentDropsChips  = document.getElementById('recent-drops-chips');
+const elRecentDropsEmpty  = document.getElementById('recent-drops-empty');
+
+function renderRecentDropsFooter() {
+  if (!elRecentDropsFooter) return;
+  if (!Array.isArray(lastResultDrops) || lastResultDrops.length === 0) {
+    if (elRecentDropsChips) elRecentDropsChips.innerHTML = '';
+    if (elRecentDropsEmpty) elRecentDropsEmpty.hidden = false;
+    return;
+  }
+  if (elRecentDropsEmpty) elRecentDropsEmpty.hidden = true;
+  if (!elRecentDropsChips) return;
+
+  elRecentDropsChips.innerHTML = lastResultDrops.map(d => {
+    const registeredWatch = findWatchByKey(d.category, d.itemId);
+    const registered = !!registeredWatch;
+    // 表示は s/.jpg 固定。既ウォッチ済みなら base64 dump (iconCached) を優先 → ストレージから瞬時表示。
+    // 未登録は CDN の s/.jpg 直 URL（設定 UI / ダッシュボードと同 URL のためブラウザキャッシュが効く）。
+    const iconSrc = (registeredWatch && registeredWatch.iconCached)
+      ? registeredWatch.iconCached
+      : buildIconUrl(d.category, d.itemId);
+    const countBadge = (d.count > 1)
+      ? `<span class="recent-drop-count">×${d.count}</span>` : '';
+    const checkBadge = registered ? `<span class="recent-drop-check">✓</span>` : '';
+    const cls = `recent-drop-chip${registered ? ' is-registered' : ''}`;
+    const title = registered ? t('recentDropAddedTitle') : t('recentDropAddTitle');
+    return `<button class="${cls}" data-cat="${esc(d.category)}" data-id="${esc(d.itemId)}" title="${esc(title)}" loading="lazy">
+      <img src="${esc(iconSrc)}" alt="" loading="lazy" decoding="async">
+      ${countBadge}
+      ${checkBadge}
+    </button>`;
+  }).join('');
+
+  elRecentDropsChips.querySelectorAll('.recent-drop-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      if (chip.classList.contains('is-registered')) return; // 既登録は no-op
+      const cat = chip.dataset.cat;
+      const id  = chip.dataset.id;
+      const r = addDropWatchFromObserved(cat, id);
+      if (r.ok) {
+        // 即時に ✓ バッジ表示。再描画で他チップ状態も同期。
+        renderRecentDropsFooter();
+        renderDropWatchEditor();
+        if (activeTab === 'dashboard') renderDashboard();
+      }
+    });
+  });
+}
 
 btnAssist.addEventListener('click', async () => {
   const tab = await getGBFTab();
@@ -2114,7 +2503,7 @@ tplNameInput.addEventListener('keydown', (e) => {
 
 // ── 初期化 ────────────────────────────────────────────
 (async () => {
-  // 初期タブを body クラスへ反映（rescue / host-history / info の 3 値排他）
+  // 初期タブを body クラスへ反映（dashboard / rescue / host-history / info の排他）
   document.body.classList.add(`tab-${activeTab}`);
 
   // バージョンをmanifestから自動取得
@@ -2136,6 +2525,13 @@ tplNameInput.addEventListener('keydown', (e) => {
   renderTemplates();
   renderFavBar();
 
+  // ドロップウォッチのアイコンを未取得分だけ background に依頼
+  ensureDropIconsCached();
+  // フッター（最近観測ドロップ）初期描画
+  renderRecentDropsFooter();
+
+  // 初期タブ（ダッシュボード）を描画。救援リストも裏で読み込んでおく。
+  renderDashboard();
   load(false);
 
   // 開きっぱなし対策: 60秒ごとに期限切れ event エントリ・activeEvents を掃除
@@ -2146,7 +2542,7 @@ tplNameInput.addEventListener('keydown', (e) => {
     if (pruneExpiredEventBanners())     dirty = true;
     if (dirty) {
       saveHostHistory();
-      if (activeTab === 'host-history') renderHostHistory();
+      refreshHostViews();
     }
   }, 60_000);
 })();

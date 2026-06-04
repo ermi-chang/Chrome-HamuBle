@@ -22,6 +22,194 @@
   const HELL_SKIP_RE = /^#quest\/supporter\/str_params\//;
   const PENDING_HOST_TTL = 120_000; // 120秒で自動失効
 
+  // ── バトルリザルト画面 検出用 ──────────────────────────
+  // 既知のリザルト hash パターン (#result_multi/{battleId} 等)。
+  // 第2セグメントの数値（battleId / raidId）で一意な resultKey を生成し、
+  // 同一リザルトで MutationObserver が複数回発火しても二重カウントを防ぐ。
+  const DROP_RESULT_HASH_RE = /^#result(_multi|_pro_quest_skip)?\/(\d+)(?:\/|$)/;
+  const seenResultKeys = new Set();    // session 内のみ。永続 dedupe は sidepanel 側で resultKey をキーに行う
+  let cachedDropWatch = [];            // gbfRfDropWatch のキャッシュ
+  let dropWatchLoaded = false;
+
+  function loadDropWatch() {
+    chrome.storage.local.get(['gbfRfDropWatch'], (data) => {
+      cachedDropWatch = Array.isArray(data.gbfRfDropWatch) ? data.gbfRfDropWatch : [];
+      dropWatchLoaded = true;
+    });
+  }
+  // ストレージ側で編集された時は即座に反映する
+  try {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'local' && changes.gbfRfDropWatch) {
+        cachedDropWatch = Array.isArray(changes.gbfRfDropWatch.newValue) ? changes.gbfRfDropWatch.newValue : [];
+        dropWatchLoaded = true;
+      }
+    });
+  } catch (_) { /* ignore */ }
+
+  function isDropResultHash(hash) {
+    return typeof hash === 'string' && DROP_RESULT_HASH_RE.test(hash);
+  }
+  function getResultKey(hash) {
+    const m = (hash || '').match(DROP_RESULT_HASH_RE);
+    if (!m) return null;
+    return `result${m[1] || ''}_${m[2]}`;
+  }
+
+  // GBF 画像 CDN URL 正規化（sidepanel.js と同等のロジック・content 側コピー）
+  const ASSET_URL_RE = /\/sp\/assets\/(.+?)\/(m|s|b)\/(\d+)\.(jpg|png)(?:[?#]|$)/i;
+  function parseAssetUrl(u) {
+    if (typeof u !== 'string') return null;
+    const m = ASSET_URL_RE.exec(u);
+    if (!m) return null;
+    return { category: m[1], size: m[2], itemId: m[3], ext: m[4].toLowerCase() };
+  }
+  // リザルト画面の DOM をスキャンし、`.prt-treasure-image` 内の img.src（m/.jpg）から
+  // {category, itemId} を抽出。同一エントリの `.prt-article-count` から個数（"x4" → 4）を取得。
+  // - DROP_LOGGED: ウォッチリスト一致のみ
+  // - RECENT_DROPS_DETECTED: 全ドロップ（フッターサジェスト用、storage 保存はしない）
+  // 返り値: true=送信もしくは dedupe 済み（呼び出し側の Observer は撤収して良い）
+  //         false=未完了（DOM 出現待ちで再試行する）
+  // hashOverride: hashchange 離脱時に保存しておいた旧 hash を渡せる（離脱後でも scan できる）
+  function scanResultDrops(hashOverride) {
+    if (!isContextValid()) return false;
+    if (!dropWatchLoaded) { loadDropWatch(); return false; }
+
+    const hash = (typeof hashOverride === 'string' && hashOverride) ? hashOverride : (location.hash || '');
+    if (!isDropResultHash(hash)) return false;
+    const key = getResultKey(hash);
+    if (!key) return false;
+    if (seenResultKeys.has(key)) return true;  // 既送信: Observer 切断 OK
+
+    // リザルト DOM のコンテナを多層フォールバックで取得
+    const root =
+      document.querySelector('#mc-result-ok-screen') ||
+      document.querySelector('#prt-result-area, #prt-defeat-elem') ||
+      document.querySelector('[class*="defeat-elem"], [class*="result-content"]') ||
+      document.querySelector('#wrapper') ||
+      document.body;
+    if (!root) return false;
+
+    // ドロップ枠を列挙。`.prt-treasure-image` が標準だが、DOM 形式違いに備えて
+    // 取れなかった場合のみ汎用フォールバックで img[src*="/sp/assets/"] を走査。
+    let entries = Array.from(root.querySelectorAll('.prt-treasure-image'));
+    let fallback = false;
+    if (entries.length === 0) {
+      entries = Array.from(root.querySelectorAll('img[src*="/sp/assets/"]'))
+        .map(img => img.closest('[class*="treasure"], [class*="article"], [class*="reward"]') || img.parentElement)
+        .filter(Boolean);
+      fallback = entries.length > 0;
+    }
+    if (entries.length === 0) return false;
+
+    // 集計: key = `category/itemId` 単位
+    // → { category, itemId, count }（mUrl は sidepanel 側で s/.jpg を組み立てるため送信しない）
+    const aggregated = new Map();
+    for (const entry of entries) {
+      const img = entry.querySelector('img.img-treasure-item') || entry.querySelector('img[src*="/sp/assets/"]');
+      if (!img) continue;
+      const parsed = parseAssetUrl(img.getAttribute('src') || img.src || '');
+      if (!parsed) continue;
+      // 個数: 兄弟の .prt-article-count から `x{N}` を抽出（無ければ 1）
+      const cntEl = entry.querySelector('.prt-article-count');
+      let count = 1;
+      if (cntEl) {
+        const m = /x\s*(\d+)/i.exec(cntEl.textContent || '');
+        if (m) count = parseInt(m[1], 10) || 1;
+      }
+      const k = `${parsed.category}/${parsed.itemId}`;
+      const cur = aggregated.get(k);
+      if (cur) {
+        cur.count += count;
+      } else {
+        aggregated.set(k, {
+          category: parsed.category,
+          itemId:   parsed.itemId,
+          count,
+        });
+      }
+    }
+    if (aggregated.size === 0) return false;
+
+    const drops = Array.from(aggregated.values());
+
+    // ウォッチリストと完全一致するもののみ hits
+    const watchKeys = new Map();
+    for (const w of cachedDropWatch) {
+      if (!w || !w.category || !w.itemId) continue;
+      watchKeys.set(`${w.category}/${w.itemId}`, w);
+    }
+    const hits = [];
+    for (const d of drops) {
+      const w = watchKeys.get(`${d.category}/${d.itemId}`);
+      if (!w) continue;
+      hits.push({ watchId: w.id, name: w.name || `${d.category}/${d.itemId}`, count: d.count });
+    }
+
+    seenResultKeys.add(key);
+    console.log('[hamuble:drop] scan', { resultKey: key, drops: drops.length, hits: hits.length, fallback });
+
+    // RECENT_DROPS_DETECTED: 全ドロップ（フッター用）
+    chrome.runtime.sendMessage({
+      type:       'RECENT_DROPS_DETECTED',
+      resultKey:  key,
+      drops,
+      detectedAt: Date.now(),
+    }).catch(() => {});
+
+    // DROP_LOGGED: ウォッチ一致のみ
+    if (hits.length > 0) {
+      chrome.runtime.sendMessage({
+        type:       'DROP_LOGGED',
+        resultKey:  key,
+        hash,
+        hits,
+        detectedAt: Date.now(),
+      }).catch(() => {});
+    }
+    return true;
+  }
+
+  // リザルト DOM 出現を即時検知する Observer 方式（v3）。
+  // 旧: setTimeout 600/1800/4000ms の段階試行 → ユーザーが「リザルト一瞬見て即離脱」する
+  //      ~100–300ms の運用で取りこぼしていた。
+  // 新: hash 検出と同 tick で同期 scan → 失敗なら MutationObserver で DOM 出現を待つ。
+  //      離脱時の hashchange でも最後の試行を実行（DOM 破棄前の最後の砦）。
+  let resultDropObserver = null;
+  let resultDropDeadline = null;
+  let pendingResultHash  = null;  // Observer 起動時の hash（離脱後 scan 用に保持）
+
+  function teardownResultDropObserver() {
+    if (resultDropObserver) { resultDropObserver.disconnect(); resultDropObserver = null; }
+    if (resultDropDeadline) { clearTimeout(resultDropDeadline); resultDropDeadline = null; }
+    pendingResultHash = null;
+  }
+
+  function scheduleResultScan() {
+    teardownResultDropObserver();
+    pendingResultHash = location.hash || '';
+
+    // 1) 即時試行: hash 検出と同じ tick で 1 回。DOM がすでに揃っていれば一発で終わる。
+    if (scanResultDrops(pendingResultHash)) {
+      pendingResultHash = null;
+      return;
+    }
+
+    // 2) DOM 出現を待つ: .prt-treasure-image / .img-treasure-item の挿入を即時検知。
+    //    出現時に同期 scan → 成功なら即 disconnect（パフォーマンス・リーク対策）。
+    resultDropObserver = new MutationObserver(() => {
+      if (document.querySelector('.prt-treasure-image, .img-treasure-item')) {
+        if (scanResultDrops(pendingResultHash)) {
+          teardownResultDropObserver();
+        }
+      }
+    });
+    resultDropObserver.observe(document.body, { childList: true, subtree: true });
+
+    // 3) 5 秒で諦め（無報酬リザルトや DOM 形式違いのフォールバック）。
+    resultDropDeadline = setTimeout(teardownResultDropObserver, 5000);
+  }
+
   // hell skip URL の `quest_id=…&quest_type=…&...` 部分を { key: value } にパース
   function parseHellSkipUrl(hash) {
     const m = hash.match(/^#quest\/supporter\/str_params\/(.+)$/);
@@ -1213,6 +1401,17 @@
       setTimeout(tryReportEventInfo, 1800);
     }
 
+    // バトルリザルト画面 (#result_multi/{battleId} 等): ウォッチリスト一致ドロップを 1 回送出
+    if (isDropResultHash(hash)) {
+      scheduleResultScan();
+    } else if (pendingResultHash) {
+      // リザルト → 非リザルトへの遷移。ユーザーが「リザルト一瞬見て即離脱」したケース。
+      // DOM がまだ残っていれば、保存した旧 hash で最後の試行を打つ。冪等（seenResultKeys で dedupe）。
+      const lastHash = pendingResultHash;
+      scanResultDrops(lastHash);
+      teardownResultDropObserver();
+    }
+
     // mypage グローバルバナー読取り（バナーは非同期描画されるため遅延 2 段）
     if (hash.indexOf('#mypage') === 0 || document.querySelector('.prt-global-banner')) {
       setTimeout(tryReportEventBanners, 600);
@@ -1406,6 +1605,12 @@
   if (isEventOrTeaserHash(location.hash)) {
     setTimeout(tryReportEventInfo, 600);
     setTimeout(tryReportEventInfo, 1800);
+  }
+
+  // 起動時にウォッチリストを 1 回ロード、リザルトページ上ならスキャンも開始
+  loadDropWatch();
+  if (isDropResultHash(location.hash)) {
+    scheduleResultScan();
   }
 
 })();
