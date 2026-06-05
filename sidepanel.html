@@ -207,19 +207,56 @@
     .dash-sum-cat { color: var(--tx1); }
     .dash-sum-n { font-weight: 700; color: var(--tx0); }
     .dash-sum-empty { font-size: 11px; color: var(--tx2); }
-    /* ドロップログ累計（アイコン化） */
-    .dash-drop-list { display: flex; flex-direction: column; gap: 3px; }
-    .dash-drop-row {
-      display: grid; grid-template-columns: 30px auto auto;
-      align-items: center; gap: 8px;
-      padding: 3px 4px;
-      border-bottom: 1px dashed var(--bdr);
-      font-size: 12px;
+    /* ドロップカレンダー（月単位、月曜始まり、土日強調、左右ナビ） */
+    .dash-drop-cal-nav {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 4px;
     }
-    .dash-drop-row:last-child { border-bottom: none; }
-    .dash-drop-icon  { width: 30px; height: 30px; border-radius: 4px; object-fit: cover; background: var(--bg2); }
-    .dash-drop-count { color: var(--acc); font-weight: 700; min-width: 28px; text-align: left; }
-    .dash-drop-last  { color: var(--tx2); font-size: 10px; }
+    .dash-drop-cal-prev, .dash-drop-cal-next {
+      background: var(--bg2); border: 1px solid var(--bdr); color: var(--tx1);
+      border-radius: 4px; padding: 1px 8px; font-size: 12px; cursor: pointer;
+    }
+    .dash-drop-cal-prev:hover, .dash-drop-cal-next:hover:not([disabled]) {
+      background: var(--bg1); color: var(--tx0);
+    }
+    .dash-drop-cal-next[disabled] { opacity: 0.4; cursor: not-allowed; }
+    .dash-drop-cal-month { color: var(--tx0); font-weight: 700; font-size: 12px; }
+
+    .dash-drop-cal-head {
+      display: grid; grid-template-columns: repeat(7, 1fr);
+      gap: 2px; margin-bottom: 2px;
+    }
+    .dash-drop-cal-head > div {
+      text-align: center; font-size: 10px; color: var(--tx2); padding: 1px 0;
+    }
+    .dash-drop-cal-head .sat { color: #8aa8d8; }
+    .dash-drop-cal-head .sun { color: #d88a8a; }
+
+    .dash-drop-cal {
+      display: grid; grid-template-columns: repeat(7, 1fr);
+      gap: 2px;
+    }
+    .dash-drop-cell {
+      position: relative; min-height: 34px;
+      padding: 1px 2px;
+      background: var(--bg2); border-radius: 3px;
+      display: flex; flex-direction: column;
+      overflow: hidden;
+    }
+    .dash-drop-cell.sat   { background: rgba(110, 140, 190, 0.15); }
+    .dash-drop-cell.sun   { background: rgba(190, 110, 110, 0.15); }
+    .dash-drop-cell.off   { opacity: 0.45; }
+    .dash-drop-cell.today { outline: 1px solid var(--acc); }
+    .dash-drop-cell-date  { color: var(--tx2); font-size: 9px; line-height: 1; }
+    .dash-drop-cell-items { display: flex; flex-wrap: wrap; gap: 1px 2px; margin-top: 1px; }
+    .dash-drop-cell-item  { display: inline-flex; align-items: center; gap: 1px; }
+    .dash-drop-cell-item img {
+      width: 21px; height: 21px; border-radius: 2px;
+      object-fit: cover; background: var(--bg1);
+    }
+    .dash-drop-cell-item-count {
+      font-size: 9px; color: var(--acc); font-weight: 700; line-height: 1;
+    }
     .dash-drop-empty { font-size: 11px; color: var(--tx2); }
 
     /* 設定: ドロップウォッチ（アイコンチップ式） */
@@ -985,7 +1022,7 @@
   <div class="setting-block setting-drop-watch">
     <div class="setting-block-head">
       <span class="setting-lbl" data-i18n="settingsDropWatchTitle">掉落监视</span>
-      <button class="btn-drop-reset" id="btn-drop-reset" data-i18n="settingsDropResetAll">清空累计</button>
+      <button class="btn-drop-reset" id="btn-drop-reset" data-i18n="settingsDropResetAll">清空记录</button>
     </div>
     <div class="drop-watch-chips" id="drop-watch-chips"></div>
     <div class="drop-watch-input" id="drop-watch-input">

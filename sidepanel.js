@@ -25,10 +25,15 @@ const FAV_LONGPRESS_MS = 400;
 let favorites   = new Array(FAV_SLOT_COUNT).fill(null);
 
 // ── ドロップログ（累計） ───────────────────────────────
-// 日次リセットされない長期記録。content.js がリザルト画面を読み取り、
-// gbfRfDropWatch（ウォッチリスト）の {category, itemId} 完全一致でカウントする。
+// 取得イベントごとに 1 件として保持する時系列ログ（最新先頭、最大 500 件 / 90 日）。
+// 同じアイテムでも別タイミングで取れば別エントリ。表示は月単位カレンダー（7×4〜6 セル）。
 // 画像URL正規化は parseAssetUrl / buildIconUrl / buildMatchUrl を参照。
-let dropLog        = {};  // { [watchId]: { count, lastAt } }
+const DROP_EVENTS_MAX    = 500;
+const DROP_EVENTS_TTL_MS = 90 * 24 * 60 * 60 * 1000;  // 90 日（約 3 ヶ月）
+const DROP_WATCH_MAX     = 20;
+let dropEvents     = [];  // [{ watchId, at, count }, ...]  新しいものが先頭
+// カレンダー表示中の月（year, month: 0-11）。初期値 = 今月。`<`/`>` で前後月へ移動。
+let calendarMonth  = (() => { const n = new Date(); return { year: n.getFullYear(), month: n.getMonth() }; })();
 let dropWatch      = [];  // [{ id, name, category, itemId, iconCached, addedAt }]
 let seenResultKeys = {};  // { [resultKey]: detectedAt }  二重カウント防止（古いものは TTL で掃除）
 const SEEN_RESULT_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 日
@@ -136,6 +141,24 @@ const elHideDepleted    = document.getElementById('hide-depleted');
 const elShowEventBanner = document.getElementById('show-event-banner');
 const elIconBar   = document.getElementById('icon-bar');
 const elDashboard = document.getElementById('dashboard');
+// ダッシュボード内のドロップカレンダー左右ナビ（再描画後も生き残るよう委譲）
+if (elDashboard) {
+  elDashboard.addEventListener('click', (e) => {
+    const prev = e.target.closest('.dash-drop-cal-prev');
+    if (prev) {
+      if (calendarMonth.month === 0) { calendarMonth.year--; calendarMonth.month = 11; }
+      else calendarMonth.month--;
+      renderDashboard();
+      return;
+    }
+    const next = e.target.closest('.dash-drop-cal-next');
+    if (next && !next.hasAttribute('disabled')) {
+      if (calendarMonth.month === 11) { calendarMonth.year++; calendarMonth.month = 0; }
+      else calendarMonth.month++;
+      renderDashboard();
+    }
+  });
+}
 const elHostDate      = document.getElementById('host-date');
 const btnClearHistory = document.getElementById('btn-clear-history');
 const elHostCategoryBar = document.getElementById('host-category-bar');
@@ -990,25 +1013,24 @@ chrome.runtime.onMessage.addListener((message) => {
     // 見た目が変わらない再観測（取得済みバナーの lastSeenAt 更新のみ）では再描画しない。
     if (visualChanged) refreshHostViews();
   } else if (message.type === 'DROP_LOGGED') {
-    // content.js が検出したリザルト画面ドロップを累計に加算する。
+    // content.js が検出したリザルト画面ドロップを「取得イベント」として時系列に積む。
+    // 同じアイテムが別タイミングで落ちれば別エントリ。最新 10 件のみ保持し超過分は破棄。
     // resultKey で永続 dedupe（content.js 側の session 内 dedupe を再起動跨ぎでも維持）。
     const key  = String(message.resultKey || '');
     const hits = Array.isArray(message.hits) ? message.hits : [];
     if (!key || hits.length === 0) return;
     if (seenResultKeys[key]) return; // 既に集計済み
     seenResultKeys[key] = Number.isFinite(message.detectedAt) ? message.detectedAt : Date.now();
-    const now = Date.now();
+    const now = Number.isFinite(message.detectedAt) ? message.detectedAt : Date.now();
     for (const h of hits) {
       const wid = String(h.watchId || '');
       if (!wid) continue;
       const cnt = Number.isFinite(h.count) ? Math.max(0, h.count) : 0;
       if (cnt === 0) continue;
-      const cur = dropLog[wid] || { count: 0, lastAt: 0 };
-      cur.count  = (cur.count || 0) + cnt;
-      cur.lastAt = now;
-      dropLog[wid] = cur;
+      dropEvents.unshift({ watchId: wid, at: now, count: cnt });
     }
-    chrome.storage.local.set({ gbfRfDropLog: dropLog, gbfRfSeenResultKeys: seenResultKeys });
+    pruneDropEvents();
+    chrome.storage.local.set({ gbfRfDropEvents: dropEvents, gbfRfSeenResultKeys: seenResultKeys });
     if (activeTab === 'dashboard') renderDashboard();
   } else if (message.type === 'RECENT_DROPS_DETECTED') {
     // 直近 1 リザルト分の全ドロップ。蓄積せず置換のみ。storage 書き込みなし。
@@ -1483,21 +1505,29 @@ function migrateHostHistoryIfNeeded(raw) {
 
 async function loadHostHistory() {
   return new Promise(resolve => {
-    chrome.storage.local.get(['gbfRfHostHistory', 'gbfRfQuestMeta', 'gbfRfHostHistoryDate', 'gbfRfEnemyImgCache', 'gbfRfActiveEvents', 'gbfRfEventBanners', 'gbfRfDropLog', 'gbfRfDropWatch', 'gbfRfSeenResultKeys'], data => {
-      // ドロップログ（累計）と ウォッチリスト
-      dropLog        = (data.gbfRfDropLog && typeof data.gbfRfDropLog === 'object') ? data.gbfRfDropLog : {};
+    chrome.storage.local.get(['gbfRfHostHistory', 'gbfRfQuestMeta', 'gbfRfHostHistoryDate', 'gbfRfEnemyImgCache', 'gbfRfActiveEvents', 'gbfRfEventBanners', 'gbfRfDropEvents', 'gbfRfDropWatch', 'gbfRfSeenResultKeys'], data => {
+      // ドロップ取得イベント（時系列）と ウォッチリスト
+      dropEvents     = Array.isArray(data.gbfRfDropEvents)
+        ? data.gbfRfDropEvents.filter(e => e && typeof e === 'object' && e.watchId)
+        : [];
       seenResultKeys = (data.gbfRfSeenResultKeys && typeof data.gbfRfSeenResultKeys === 'object') ? data.gbfRfSeenResultKeys : {};
+
+      // TTL + 件数上限でトリム。差分があれば書き戻す。
+      if (pruneDropEvents()) chrome.storage.local.set({ gbfRfDropEvents: dropEvents });
+
+      // 旧 gbfRfDropLog（累計合算形式）は廃止 → 1 回だけ掃除
+      chrome.storage.local.remove('gbfRfDropLog');
 
       // ウォッチリストの形式チェック・マイグレーション
       const rawWatch = Array.isArray(data.gbfRfDropWatch) ? data.gbfRfDropWatch : null;
-      // 旧形式（patterns/itemIds/labelKey/enabled を持つ）を検出したら全置換し dropLog もリセット
+      // 旧形式（patterns/itemIds/labelKey/enabled を持つ）を検出したら全置換し dropEvents もリセット
       const isLegacyFormat = rawWatch && rawWatch.some(w =>
         w && (Array.isArray(w.patterns) || Array.isArray(w.itemIds) || 'labelKey' in w || 'enabled' in w)
       );
       if (!rawWatch || isLegacyFormat) {
         dropWatch = DEFAULT_DROP_WATCH.map(w => ({ ...w, addedAt: Date.now() }));
-        dropLog = {};
-        chrome.storage.local.set({ gbfRfDropWatch: dropWatch, gbfRfDropLog: dropLog });
+        dropEvents = [];
+        chrome.storage.local.set({ gbfRfDropWatch: dropWatch, gbfRfDropEvents: dropEvents });
       } else {
         dropWatch = rawWatch;
       }
@@ -2027,35 +2057,103 @@ function buildHostSummaryHTML() {
     </div>`;
 }
 
-// ── ドロップログ（累計）HTML 生成 ──────────────────────
-// ウォッチリストの順序で表示。enabled=false や count=0 のエントリは表示しない。
-// 表示名は labelKey の i18n 優先、無ければ name。
+// ── dropEvents の TTL / 件数トリム ─────────────────────
+// 90 日より古いものを削除し、それでも 500 件超なら新しい順に切り詰める。
+// dropEvents は新しいものが先頭。変更があったか boolean で返す。
+function pruneDropEvents() {
+  const cutoff = Date.now() - DROP_EVENTS_TTL_MS;
+  const before = dropEvents.length;
+  dropEvents = dropEvents.filter(e => e && Number.isFinite(e.at) && e.at >= cutoff);
+  if (dropEvents.length > DROP_EVENTS_MAX) dropEvents = dropEvents.slice(0, DROP_EVENTS_MAX);
+  return dropEvents.length !== before;
+}
+
+// ローカル時刻の YYYY-MM-DD キー
+function ymd(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
+
+// ── ドロップカレンダー HTML 生成（月単位、月曜始まり、左右ナビ） ────
+// `calendarMonth` の月の 1 日含む週の月曜 〜 末日含む週の日曜までを描画。
+// 各セルは [icon]×N をその日に集約。土曜/日曜/今日/当月外でスタイル分岐。
 function buildDropLogHTML() {
-  const rows = [];
-  for (const w of dropWatch) {
-    if (!w) continue;
-    const rec = dropLog[w.id];
-    const count = rec?.count || 0;
-    if (count === 0) continue;
-    const lastAt = rec?.lastAt ? new Date(rec.lastAt) : null;
-    const dateStr = lastAt
-      ? `${pad(lastAt.getMonth() + 1)}-${pad(lastAt.getDate())}`
-      : '';
-    const iconSrc = w.iconCached || buildIconUrl(w.category, w.itemId);
-    const label   = w.name || `${w.category}/${w.itemId}`;
-    rows.push(`
-      <div class="dash-drop-row" title="${esc(label)}">
-        <img class="dash-drop-icon" src="${esc(iconSrc)}" alt="" loading="lazy" decoding="async">
-        <span class="dash-drop-count">×${count}</span>
-        <span class="dash-drop-last">${esc(dateStr)}</span>
-      </div>`);
+  const y = calendarMonth.year, m = calendarMonth.month;
+  const firstOfMonth = new Date(y, m, 1);
+  const lastOfMonth  = new Date(y, m + 1, 0);
+  const dow0 = (firstOfMonth.getDay() + 6) % 7;   // 月=0..日=6
+  const dowL = (lastOfMonth.getDay() + 6) % 7;
+  const startDate = new Date(y, m, 1 - dow0);
+  const endDate   = new Date(lastOfMonth); endDate.setDate(lastOfMonth.getDate() + (6 - dowL));
+  const totalDays = Math.round((endDate - startDate) / 86400000) + 1;
+
+  // 日付キー -> Map<watchId, count> に集約
+  const byDay = new Map();
+  for (const ev of dropEvents) {
+    if (!ev || !Number.isFinite(ev.at) || !ev.watchId) continue;
+    const d = new Date(ev.at);
+    if (d < startDate || d > endDate) continue;
+    const key = ymd(d);
+    let perDay = byDay.get(key);
+    if (!perDay) { perDay = new Map(); byDay.set(key, perDay); }
+    perDay.set(ev.watchId, (perDay.get(ev.watchId) || 0) + ev.count);
   }
+
+  // 曜日ヘッダ（月曜始まり、土日に別色）
+  const headKeys = ['weekdayMon','weekdayTue','weekdayWed','weekdayThu','weekdayFri','weekdaySat','weekdaySun'];
+  const head = headKeys.map((k, i) => {
+    const cls = i === 5 ? 'sat' : i === 6 ? 'sun' : '';
+    return `<div class="${cls}">${esc(t(k))}</div>`;
+  }).join('');
+
+  // セル生成
+  const now = new Date();
+  const todayKey = ymd(now);
+  const cells = [];
+  for (let i = 0; i < totalDays; i++) {
+    const d = new Date(startDate); d.setDate(startDate.getDate() + i);
+    const dow = (d.getDay() + 6) % 7;
+    const cls = ['dash-drop-cell'];
+    if (dow === 5) cls.push('sat');
+    if (dow === 6) cls.push('sun');
+    if (d.getMonth() !== m) cls.push('off');
+    const key = ymd(d);
+    if (key === todayKey) cls.push('today');
+
+    let items = '';
+    const perDay = byDay.get(key);
+    if (perDay) {
+      const parts = [];
+      for (const [watchId, count] of perDay) {
+        const w = dropWatch.find(x => x && x.id === watchId);
+        if (!w) continue;
+        const iconSrc = w.iconCached || buildIconUrl(w.category, w.itemId);
+        const label   = w.name || `${w.category}/${w.itemId}`;
+        parts.push(
+          `<span class="dash-drop-cell-item" title="${esc(label)}">` +
+            `<img src="${esc(iconSrc)}" alt="" loading="lazy" decoding="async">` +
+            `<span class="dash-drop-cell-item-count">×${count}</span>` +
+          `</span>`);
+      }
+      items = parts.join('');
+    }
+    cells.push(
+      `<div class="${cls.join(' ')}">` +
+        `<span class="dash-drop-cell-date">${d.getDate()}</span>` +
+        `<div class="dash-drop-cell-items">${items}</div>` +
+      `</div>`);
+  }
+
+  // 月ナビ（>: 今月で disabled）
+  const canNext = (y < now.getFullYear()) || (y === now.getFullYear() && m < now.getMonth());
+  const monthLabel = `${y}-${pad(m + 1)}`;
+
   return `
     <div class="dash-section">
-      <div class="dash-section-title">${esc(t('dashDropLogTitle'))}</div>
-      ${rows.length > 0
-        ? `<div class="dash-drop-list">${rows.join('')}</div>`
-        : `<div class="dash-drop-empty">${esc(t('dashDropEmpty'))}</div>`}
+      <div class="dash-drop-cal-nav">
+        <button class="dash-drop-cal-prev" type="button">‹</button>
+        <span class="dash-drop-cal-month">${esc(monthLabel)}</span>
+        <button class="dash-drop-cal-next" type="button"${canNext ? '' : ' disabled'}>›</button>
+      </div>
+      <div class="dash-drop-cal-head">${head}</div>
+      <div class="dash-drop-cal">${cells.join('')}</div>
     </div>`;
 }
 
@@ -2292,6 +2390,7 @@ function addDropWatchFromUrl(url) {
   const p = parseAssetUrl(url);
   if (!p) return { ok: false, reason: 'invalid' };
   if (findWatchByKey(p.category, p.itemId)) return { ok: false, reason: 'dup' };
+  if (dropWatch.length >= DROP_WATCH_MAX) return { ok: false, reason: 'limit' };
   dropWatch.push({
     id:         makeWatchId(p.category, p.itemId),
     name:       '',
@@ -2310,6 +2409,7 @@ function addDropWatchFromUrl(url) {
 function addDropWatchFromObserved(category, itemId) {
   if (!category || !itemId) return { ok: false, reason: 'invalid' };
   if (findWatchByKey(category, itemId)) return { ok: false, reason: 'dup' };
+  if (dropWatch.length >= DROP_WATCH_MAX) return { ok: false, reason: 'limit' };
   dropWatch.push({
     id:         makeWatchId(category, itemId),
     name:       '',
@@ -2344,10 +2444,13 @@ function renderDropWatchEditor() {
       if (!Number.isInteger(idx)) return;
       const removed = dropWatch[idx];
       dropWatch.splice(idx, 1);
-      // 累計ログから該当 watchId を削除（ダッシュボードから消える）
-      if (removed && dropLog[removed.id]) {
-        delete dropLog[removed.id];
-        chrome.storage.local.set({ gbfRfDropLog: dropLog });
+      // 取得イベントから該当 watchId のものを削除（ダッシュボードから消える）
+      if (removed) {
+        const before = dropEvents.length;
+        dropEvents = dropEvents.filter(ev => ev && ev.watchId !== removed.id);
+        if (dropEvents.length !== before) {
+          chrome.storage.local.set({ gbfRfDropEvents: dropEvents });
+        }
       }
       saveDropWatch();
       renderDropWatchEditor();
@@ -2368,6 +2471,8 @@ function submitDropWatchUrl() {
     renderDropWatchEditor();
     renderRecentDropsFooter();
     if (activeTab === 'dashboard') renderDashboard();
+  } else if (r.reason === 'limit') {
+    if (elDropWatchErr) elDropWatchErr.textContent = t('settingsDropUrlErrLimit');
   } else {
     if (elDropWatchErr) elDropWatchErr.textContent = t('settingsDropUrlErrInvalid');
   }
@@ -2386,9 +2491,9 @@ if (elDropWatchUrl) {
 if (btnDropReset) {
   btnDropReset.addEventListener('click', () => {
     if (!confirm(t('settingsDropResetConfirm'))) return;
-    dropLog = {};
+    dropEvents = [];
     seenResultKeys = {};
-    chrome.storage.local.set({ gbfRfDropLog: dropLog, gbfRfSeenResultKeys: seenResultKeys });
+    chrome.storage.local.set({ gbfRfDropEvents: dropEvents, gbfRfSeenResultKeys: seenResultKeys });
     if (activeTab === 'dashboard') renderDashboard();
     renderRecentDropsFooter();
   });
