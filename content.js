@@ -23,10 +23,13 @@
   const PENDING_HOST_TTL = 120_000; // 120秒で自動失効
 
   // ── バトルリザルト画面 検出用 ──────────────────────────
-  // 既知のリザルト hash パターン (#result_multi/{battleId} 等)。
+  // 既知のリザルト hash パターン (#result/{id}, #result_multi/{id},
+  // #result_hell_skip/{id}, #result_pro_quest_skip/{id} 等の skip 版含む全バリアント)。
+  // GBF の hash で `#result(_…)?/数字` 形式は常にバトルリザルト系のため、
+  // サフィックスは固定列挙ではなく任意の `_word…` を許容して将来追加にも対応する。
   // 第2セグメントの数値（battleId / raidId）で一意な resultKey を生成し、
   // 同一リザルトで MutationObserver が複数回発火しても二重カウントを防ぐ。
-  const DROP_RESULT_HASH_RE = /^#result(_multi|_pro_quest_skip)?\/(\d+)(?:\/|$)/;
+  const DROP_RESULT_HASH_RE = /^#result(_[a-z0-9_]+)?\/(\d+)(?:\/|$)/;
   const seenResultKeys = new Set();    // session 内のみ。永続 dedupe は sidepanel 側で resultKey をキーに行う
   let cachedDropWatch = [];            // gbfRfDropWatch のキャッシュ
   let dropWatchLoaded = false;
