@@ -1051,7 +1051,7 @@
   // skip ON: #skip-num-count の値だけ消費 / skip OFF: バトル経路として 1 消費。
   document.addEventListener('click', (e) => {
     if (!isContextValid()) return;
-    const okBtn = e.target.closest('.pop-start-hell.pop-show .btn-usual-ok');
+    const okBtn = e.target.closest('.pop-start-hell.pop-show .btn-usual-ok, .pop-start-hell.pop-show .btn-usual-text');
     if (!okBtn) return;
     if (!activeHellPopup) return;
 
@@ -1177,19 +1177,36 @@
   // pendingHellHost に昇格すれば後続の supporter OK / HELL_SKIP_RE 経路は既存ロジックがそのまま動く。
   document.addEventListener('click', (e) => {
     if (!isContextValid()) return;
-    const okBtn = e.target.closest('.btn-usual-ok');
+    const okBtn = e.target.closest('.btn-usual-ok, .btn-usual-text');
     if (!okBtn) return;
     const popContainer = okBtn.closest('#pop');
     if (!popContainer) return;
     const hellPopupBody = popContainer.querySelector('.prt-start-event-hell');
     if (!hellPopupBody) return;
-    if (!activeHellPopup) return;
-    // SELF_HOST_RE 昇格ブロックと同じ TTL ガード。古い activeHellPopup が
-    // 別 hell のポップアップ OK で誤って消費されるのを防ぐ。
-    if (Date.now() - activeHellPopup.ts > PENDING_HELL_TTL) {
-      console.log('[hamuble:hell] V2 skip popup OK skipped: activeHellPopup TTL expired', { age: Date.now() - activeHellPopup.ts });
-      activeHellPopup = null;
-      return;
+    if (!activeHellPopup || (Date.now() - activeHellPopup.ts) > PENDING_HELL_TTL) {
+      // トレジャーレイド等、btn-stage-detail フローを経ない単一 hell ボタン向けフォールバック。
+      // popup 内の boss 画像 URL から event slug を抽出して questId を合成する。
+      const bossImg2 = hellPopupBody.querySelector('.img-hell-boss');
+      const bossImgSrc2 = bossImg2?.getAttribute('src') || '';
+      const evMatch = bossImgSrc2.match(/\/event\/([^/]+)\//);
+      const evSlug = evMatch?.[1] || '';
+      if (!evSlug) {
+        console.log('[hamuble:hell] V2 skip popup OK: activeHellPopup missing and cannot synthesize questId');
+        activeHellPopup = null;
+        return;
+      }
+      const questId2 = `hell_event_${evSlug}`;
+      const evPeriodEndMs2 =
+        isEventAdventHash(location.hash || '') ? extractEventAdventPeriodEndMs() : null;
+      activeHellPopup = {
+        questId:          questId2,
+        chapterName:      cachedEventName || questId2,
+        hostThumbnailSrc: bossImgSrc2,
+        eventPeriodEndMs: evPeriodEndMs2,
+        eventName:        cachedEventName || '',
+        ts:               Date.now(),
+      };
+      console.log('[hamuble:hell] V2 skip popup OK: synthesized activeHellPopup', activeHellPopup);
     }
 
     const skipCheckbox   = popContainer.querySelector('#hell-skip-setting');
@@ -1254,9 +1271,9 @@
   // 重複発火しても問題なし。
   const handleSupporterOkClick = (e) => {
     if (!isContextValid()) return;
-    const okEl = e.target.closest('.btn-usual-ok');
+    const okEl = e.target.closest('.btn-usual-ok, .btn-usual-text');
     if (!okEl) return;
-    // サポート石選択画面以外の .btn-usual-ok（fate開始OK等）での誤更新を防ぐ
+    // サポート石選択画面以外の .btn-usual-ok / .btn-usual-text（fate開始OK等）での誤更新を防ぐ
     const hash = location.hash || '';
     const onSupporter = SELF_HOST_RE.test(hash);
     const onHellSkip  = HELL_SKIP_RE.test(hash);
@@ -1271,7 +1288,7 @@
     if (isPendingHellHostValid()) {
       if (src) pendingHellHost.hostThumbnailSrc = src;
       pendingHellHost.okClickedAt = Date.now();
-      console.log('[hamuble:hell] supporter btn-usual-ok → okClickedAt set', { eventType: e.type, questId: pendingHellHost.questId });
+      console.log('[hamuble:hell] supporter ok → okClickedAt set', { eventType: e.type, questId: pendingHellHost.questId });
       return;
     }
     // str_params URL は Hell 専用なので、pendingHellHost が無ければ通常経路に流さない
@@ -1450,7 +1467,9 @@
           questType:       params.quest_type || '',
           backLink:        params.back_link || 'quest!extra!event',
           observedMaxSkip: pendingHellHost.observedMaxSkip ?? null,
-          isNewSkip:       params.is_new_skip || '',
+          // URL に is_new_skip が無い hell（トレジャーレイド等）と
+          // 値あり hell（新型 hell）を区別。null = パラメータ自体が URL に無い。
+          isNewSkip:       ('is_new_skip' in params) ? (params.is_new_skip || '') : null,
         };
       }
       // skip ON / OFF 問わず、str_params URL 到達後にサポート選択画面が表示され、
@@ -1475,7 +1494,9 @@
             questType:       params.quest_type || lastFiredHell.hellSkipParams?.questType || '',
             backLink:        params.back_link || lastFiredHell.hellSkipParams?.backLink || 'quest!extra!event',
             observedMaxSkip: lastFiredHell.hellSkipParams?.observedMaxSkip ?? null,
-            isNewSkip:       params.is_new_skip || lastFiredHell.hellSkipParams?.isNewSkip || '',
+            isNewSkip:       ('is_new_skip' in params)
+              ? (params.is_new_skip || '')
+              : (lastFiredHell.hellSkipParams?.isNewSkip ?? null),
           },
           before:  null, // 現値不明 → sidepanel 側で consumedCount 経路の減算を取らせる
           skipNum,
