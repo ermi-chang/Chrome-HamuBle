@@ -2208,10 +2208,16 @@ async function hostHellQuest(questId, skipCount) {
   if (params && params.questIdNumeric && params.questType
       && Number.isFinite(skipCount) && skipCount > 0) {
     const back = params.backLink || 'quest!extra!event';
-    // GBF 仕様変更で is_new_skip パラメータが必須となった。観測値があればそれを使い、
-    // 未観測（過去 skip ON 自発時にまだ採取していなかった既存エントリ）は 1 を fallback。
-    const newSkipValue = params.isNewSkip || '1';
-    url = `https://game.granbluefantasy.jp/#quest/supporter/str_params/quest_id=${params.questIdNumeric}&quest_type=${params.questType}&skip_count=${skipCount}&is_event_hell_skip=1&is_new_skip=${newSkipValue}&back_link=${back}`;
+    // is_new_skip は hell の種類により URL に含まれる場合（新型 hell）と
+    // 含まれない場合（トレジャーレイド等）がある。観測時の URL を忠実に再現する。
+    // isNewSkip === null → URL に無かった、含めない
+    // isNewSkip === '1' 等 → そのまま埋める
+    // undefined（旧バージョン保存エントリ）→ 後方互換で '1' fallback
+    const includesNewSkip = (params.isNewSkip !== null && params.isNewSkip !== undefined);
+    const newSkipFragment = includesNewSkip
+      ? `&is_new_skip=${params.isNewSkip || '1'}`
+      : '';
+    url = `https://game.granbluefantasy.jp/#quest/supporter/str_params/quest_id=${params.questIdNumeric}&quest_type=${params.questType}&skip_count=${skipCount}&is_event_hell_skip=1${newSkipFragment}&back_link=${back}`;
     params.lastUsedSkipCount = skipCount;
     primed = true;
   }
