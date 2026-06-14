@@ -303,6 +303,9 @@ const TRANSLATIONS = {
     favEmpty:             '（空）',
     favEditTitle:         '重命名',
     favRenamePlaceholder: '输入名称...',
+    // New release notice banner
+    updateBannerText:   '发现新版本 v{v}，点击查看更新内容',
+    updateDismissTitle: '忽略此版本',
   },
 };
 

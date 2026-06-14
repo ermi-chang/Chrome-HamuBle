@@ -437,6 +437,25 @@
     .bp-shortage-banner[hidden],
     .setting-row[hidden] { display: none; }
 
+    /* ── New release notice banner ── */
+    .update-banner {
+      display: flex; align-items: center; gap: 6px;
+      padding: 8px 10px;
+      background: rgba(87,207,220,0.14);
+      border-bottom: 1px solid var(--acc);
+      color: var(--acc);
+      font-size: 12px; font-weight: 600;
+      flex-shrink: 0;
+      cursor: pointer; text-decoration: none;
+    }
+    .update-banner[hidden] { display: none; }
+    .update-banner-text { flex: 1; }
+    .update-banner-close {
+      background: none; border: none; color: var(--tx2);
+      cursor: pointer; font-size: 13px; line-height: 1; padding: 2px 4px;
+    }
+    .update-banner-close:hover { color: var(--tx0); }
+
     /* ── List BP-locked state（パネル全体グレーアウト） ── */
     .list.bp-locked {
       pointer-events: none;
@@ -1004,6 +1023,13 @@
 
 <!-- Main content -->
 <div class="main-content">
+
+<!-- New release notice (全タブ共通) -->
+<a class="update-banner" id="update-banner" target="_blank" rel="noopener" hidden>
+  <span class="update-banner-text" id="update-banner-text"></span>
+  <button class="update-banner-close" id="update-banner-close" type="button"
+          data-i18n-title="updateDismissTitle" aria-label="close">✕</button>
+</a>
 
 <!-- Header
 <div class="header">
