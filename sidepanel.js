@@ -13,6 +13,10 @@ const DEFAULTS = {
   lang: 'zh',
 };
 
+// ── 新リリース通知（GitHub Releases） ───────────────────
+const UPDATE_RELEASE_API = 'https://api.github.com/repos/ermi-chang/Chrome-HamuBle/releases/latest';
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6h
+
 let allRaids    = [];
 let isLoading   = false;
 let settings    = { ...DEFAULTS };
@@ -1322,6 +1326,90 @@ async function joinRaid(card, raid) {
 // ── Utils ─────────────────────────────────────────────
 function esc(s) {
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// ── 新リリース通知（GitHub Releases） ──────────────────
+// tag_name("v1.4.3") を manifest version と semver 比較し、新しければバナー表示。
+// fetch は api.github.com（ACAO:* のため host_permissions 不要）。前回チェックから
+// UPDATE_CHECK_INTERVAL_MS 未満なら fetch せず保存済み状態のみで描画する。
+function compareSemver(a, b) {
+  const norm = (s) => String(s || '').trim().replace(/^v/i, '').split('-')[0].split('.').map(n => parseInt(n, 10));
+  const pa = norm(a), pb = norm(b);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const x = Number.isFinite(pa[i]) ? pa[i] : 0;
+    const y = Number.isFinite(pb[i]) ? pb[i] : 0;
+    if (x > y) return 1;
+    if (x < y) return -1;
+  }
+  return 0;
+}
+function isNewerVersion(latest, current) {
+  return compareSemver(latest, current) > 0;
+}
+
+function renderUpdateBanner(state) {
+  const banner = document.getElementById('update-banner');
+  if (!banner) return;
+  const current = chrome.runtime.getManifest().version;
+  const show = state && state.latestTag
+    && isNewerVersion(state.latestTag, current)
+    && state.dismissedTag !== state.latestTag;
+  if (!show) { banner.hidden = true; return; }
+
+  const vText = esc(state.latestTag).replace(/^v/i, '');
+  const textEl = document.getElementById('update-banner-text');
+  if (textEl) textEl.textContent = t('updateBannerText', { v: vText });
+  // 外部由来 URL。https のみ許可（javascript: 等の混入防止）
+  banner.href = /^https:\/\//.test(state.latestUrl || '') ? state.latestUrl : '#';
+  banner.hidden = false;
+}
+
+async function checkForUpdate() {
+  let state = {};
+  try {
+    const data = await chrome.storage.local.get('gbfRfUpdateState');
+    state = data.gbfRfUpdateState || {};
+  } catch { return; }
+
+  // まず保存済み状態で即描画（前回 latestTag が dismiss 済みでなければ出す）
+  renderUpdateBanner(state);
+
+  // lazy: 前回チェックから一定時間未経過なら fetch しない
+  if (state.lastCheckedAt && (Date.now() - state.lastCheckedAt) < UPDATE_CHECK_INTERVAL_MS) return;
+
+  let json;
+  try {
+    const res = await fetch(UPDATE_RELEASE_API, { headers: { 'Accept': 'application/vnd.github+json' } });
+    if (!res.ok) {
+      // 403(レート)/404 等 → lastCheckedAt だけ更新して静かに終了
+      state.lastCheckedAt = Date.now();
+      await chrome.storage.local.set({ gbfRfUpdateState: state });
+      return;
+    }
+    json = await res.json();
+  } catch { return; }  // ネットワーク失敗 → 静かに無視
+
+  const next = {
+    lastCheckedAt: Date.now(),
+    latestTag: typeof json.tag_name === 'string' ? json.tag_name : '',
+    latestUrl: typeof json.html_url === 'string' ? json.html_url : '',
+    dismissedTag: state.dismissedTag || '',
+  };
+  await chrome.storage.local.set({ gbfRfUpdateState: next });
+  renderUpdateBanner(next);
+}
+
+async function dismissUpdateBanner(e) {
+  if (e) { e.preventDefault(); e.stopPropagation(); }
+  try {
+    const data = await chrome.storage.local.get('gbfRfUpdateState');
+    const state = data.gbfRfUpdateState || {};
+    state.dismissedTag = state.latestTag || '';
+    await chrome.storage.local.set({ gbfRfUpdateState: state });
+  } catch {}
+  const banner = document.getElementById('update-banner');
+  if (banner) banner.hidden = true;
 }
 
 // ── GBF日付（JST 5:00リセット） ─────────────────────
@@ -2676,6 +2764,10 @@ tplNameInput.addEventListener('keydown', (e) => {
   applySettingsToUI();
   renderTemplates();
   renderFavBar();
+
+  // 新リリース通知（非ブロッキング・lazy 6h 判定は関数内）
+  checkForUpdate();
+  document.getElementById('update-banner-close')?.addEventListener('click', dismissUpdateBanner);
 
   // ドロップウォッチのアイコンを未取得分だけ background に依頼
   ensureDropIconsCached();
