@@ -57,10 +57,37 @@
     /* ── Fav bar ── */
     .fav-bar {
       width: 28px; flex-shrink: 0;
-      display: flex; flex-direction: column; align-items: center; gap: 6px;
+      align-self: stretch;
+      display: flex; flex-direction: column; align-items: center;
       padding: 8px 0;
       background: var(--bg1); border-left: 1px solid var(--bdr);
       order: 2;
+    }
+    .fav-slots {
+      flex: 1; min-height: 0;
+      display: flex; flex-direction: column; align-items: center; gap: 6px;
+      overflow-y: auto;
+    }
+    .fav-divider {
+      width: 16px; height: 1px;
+      background: var(--bdr);
+      flex-shrink: 0;
+    }
+    .home-btn {
+      width: 22px; height: 22px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 4px; border: 1px solid var(--bdr2);
+      cursor: pointer; background: none; padding: 0;
+      color: var(--tx2); transition: all .15s;
+      margin-top: auto; flex-shrink: 0;
+    }
+    .home-btn:hover { background: var(--bg2); color: var(--tx1); }
+    .home-btn.saved { background: rgba(62,181,3,0.12); border-color: var(--grn); color: var(--grn); }
+    .home-btn.warn  { background: rgba(255,77,0,0.12);  border-color: var(--red); color: var(--red); }
+    .home-btn svg {
+      width: 14px; height: 14px;
+      fill: none; stroke: currentColor; stroke-width: 2;
+      stroke-linecap: round; stroke-linejoin: round;
     }
     .fav-slot {
       position: relative;
@@ -949,9 +976,6 @@
 
 <!-- Icon bar -->
 <div class="icon-bar" id="icon-bar">
-  <button class="icon-btn" id="btn-home" data-i18n-title="navHomeDefault">
-    <svg viewBox="0 0 24 24"><path d="M2 13l8-8 8 8"/><path d="M4 12v10h12V12"/><line x1="17" y1="5" x2="23" y2="5"/><line x1="20" y1="2" x2="20" y2="8"/></svg>
-  </button>
   <button class="icon-btn active" data-tab="dashboard" data-i18n-title="navDashboard">
     <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
   </button>
@@ -970,7 +994,13 @@
 </div>
 
 <!-- Fav bar (slots are rendered dynamically by sidepanel.js renderFavBar) -->
-<div class="fav-bar" id="fav-bar"></div>
+<div class="fav-bar" id="fav-bar">
+  <div class="fav-slots" id="fav-slots"></div>
+  <div class="fav-divider" aria-hidden="true"></div>
+  <button class="home-btn" id="btn-home" data-i18n-title="navHomeDefault">
+    <svg viewBox="0 0 24 24"><path d="M2 13l8-8 8 8"/><path d="M4 12v10h12V12"/><line x1="17" y1="5" x2="23" y2="5"/><line x1="20" y1="2" x2="20" y2="8"/></svg>
+  </button>
+</div>
 
 <!-- Main content -->
 <div class="main-content">
