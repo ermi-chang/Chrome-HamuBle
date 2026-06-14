@@ -349,7 +349,7 @@ function favDisplayName(fav) {
 }
 
 function renderFavBar() {
-  const bar = document.getElementById('fav-bar');
+  const bar = document.getElementById('fav-slots');
   if (!bar) return;
   bar.innerHTML = '';
   for (let i = 0; i < FAV_SLOT_COUNT; i++) {
@@ -960,6 +960,8 @@ chrome.runtime.onMessage.addListener((message) => {
       hash:         typeof message.hash === 'string' ? message.hash : '',
       isTeaser:     !!message.isTeaser,
       isEnding:     !!message.isEnding,
+      // 一度 is-event-end を観測したら終了扱いを保持（再訪で復活させない）。
+      isEventEnd:   !!message.isEventEnd || !!existing?.isEventEnd,
       isRewardClaim: !!message.isRewardClaim,
       lastSeenAt:   Date.now(),
       eventStartMs: Number.isFinite(message.eventStartMs) ? message.eventStartMs : (existing?.eventStartMs ?? null),
@@ -973,6 +975,8 @@ chrome.runtime.onMessage.addListener((message) => {
       if (message.periodText) b.periodText = String(message.periodText);
       if (Number.isFinite(message.eventStartMs)) b.eventStartMs = message.eventStartMs;
       if (Number.isFinite(message.eventEndMs))   b.eventEndMs   = message.eventEndMs;
+      // 終了マーカーは sticky。バナーを「開催終了」群へ固定し、未来日の報酬期間で復活させない。
+      if (message.isEventEnd) b.isEventEnd = true;
       b.lastSeenAt = Date.now();
     }
     pruneExpiredActiveEvents();
@@ -1012,6 +1016,25 @@ chrome.runtime.onMessage.addListener((message) => {
     saveHostHistory();
     // 見た目が変わらない再観測（取得済みバナーの lastSeenAt 更新のみ）では再描画しない。
     if (visualChanged) refreshHostViews();
+  } else if (message.type === 'MYPAGE_BANNERS_SWEEP') {
+    // mypage グローバルバナーの 1 スイープ完了通知。
+    // 今回 sweep の paths に含まれない Teaser バナーは即削除する（掲載終了・本開催への切替えに追従）。
+    // event/... バナーは判定対象外（既存の 14 日 TTL に委ねる）。
+    const arr = Array.isArray(message.paths) ? message.paths : [];
+    const seen = new Set(arr);
+    let changed = false;
+    for (const k of Object.keys(eventBanners)) {
+      const b = eventBanners[k];
+      if (!b || !b.isTeaser) continue;
+      if (!seen.has(k)) {
+        delete eventBanners[k];
+        changed = true;
+      }
+    }
+    if (changed) {
+      saveHostHistory();
+      refreshHostViews();
+    }
   } else if (message.type === 'DROP_LOGGED') {
     // content.js が検出したリザルト画面ドロップを「取得イベント」として時系列に積む。
     // 同じアイテムが別タイミングで落ちれば別エントリ。最新 10 件のみ保持し超過分は破棄。
@@ -1395,6 +1418,15 @@ function pruneExpiredActiveEvents() {
       continue;
     }
 
+    // 3.5. 終了マーカーあり・終了時刻不明: 最終観測 + 7日 で削除（開催中 fallback に流さない）
+    if (e.isEventEnd) {
+      if (!Number.isFinite(e.lastSeenAt) || now > e.lastSeenAt + ENDED_TTL) {
+        delete activeEvents[k];
+        changed = true;
+      }
+      continue;
+    }
+
     // 4. eventEndMs 不明、eventStartMs あり: eventStartMs + 14日 fallback
     if (Number.isFinite(e.eventStartMs)) {
       if (now > e.eventStartMs + ACTIVE_TTL) {
@@ -1554,6 +1586,9 @@ async function loadHostHistory() {
         }
         if (e && typeof e === 'object' && e.isEnding === undefined) {
           e.isEnding = false;
+        }
+        if (e && typeof e === 'object' && e.isEventEnd === undefined) {
+          e.isEventEnd = false;
         }
       }
       // キャッシュ済み敵画像をquestMetaにマージ
@@ -1764,7 +1799,7 @@ function updateCategoryChipBadges(categoryClearState) {
 // ── 開催中／予告イベント バナー HTML 生成 ──────────────
 // mypage グローバルバナー由来の eventBanners を画像で描画する。
 // 「ALL もしくは event カテゴリ選択中」のときだけ非空 HTML を返す。
-// 群分け: isTeaser→開催前 / eventEndMs<=now→開催終了（グレーアウト）/ それ以外→開催中。
+// 群分け: isTeaser→開催前 / isEventEnd または eventEndMs<=now→開催終了（グレーアウト）/ それ以外→開催中。
 function buildActiveEventsBannerHTML() {
   if (!settings.showEventBanner) return '';
   if (!shouldShowEventBanner()) return '';
@@ -1777,7 +1812,7 @@ function buildActiveEventsBannerHTML() {
     if (!b || !b.bannerSrc) continue;
     if (b.isTeaser) {
       teasers.push(b);
-    } else if (Number.isFinite(b.eventEndMs) && b.eventEndMs <= now) {
+    } else if (b.isEventEnd || (Number.isFinite(b.eventEndMs) && b.eventEndMs <= now)) {
       ended.push(b);
     } else {
       actives.push(b);
@@ -1816,14 +1851,20 @@ function buildActiveEventsBannerHTML() {
   }</div>`;
 }
 
-// ── 14日未観測のバナー（base64 キャッシュ含む）を削除 ──
+// ── 7日未観測のバナー（base64 キャッシュ含む）を削除 ──
 function pruneExpiredEventBanners() {
   const now = Date.now();
-  const TTL = 14 * 24 * 60 * 60 * 1000;
+  const TTL = 7 * 24 * 60 * 60 * 1000;
   let changed = false;
   for (const k of Object.keys(eventBanners)) {
     const b = eventBanners[k];
     if (!b || !Number.isFinite(b.lastSeenAt) || (now - b.lastSeenAt) > TTL) {
+      delete eventBanners[k];
+      changed = true;
+      continue;
+    }
+    // Teaser バナーは開催開始時刻に到達したら削除（本開催バナーは mypage 巡回で別途生成される）
+    if (b.isTeaser && Number.isFinite(b.eventStartMs) && b.eventStartMs <= now) {
       delete eventBanners[k];
       changed = true;
     }

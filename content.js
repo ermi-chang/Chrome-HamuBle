@@ -515,6 +515,15 @@
     return (document.querySelector('.prt-period')?.textContent || '').trim();
   }
 
+  // GBF は開催終了したイベントの .prt-period に is-event-end クラスを付与する。
+  // この時点で表示期間は「報酬受取期間」等の未来日に切替わっていることがあるため、
+  // 日付ではなくこのクラスを「終了の確定マーカー」として扱う。
+  function readEventPeriodIsEnded() {
+    const el = document.querySelector('#cnt-event > div.prt-period')
+            || document.querySelector('.prt-period');
+    return !!el && el.classList.contains('is-event-end');
+  }
+
   function extractEventAdventPeriodEndMs() {
     const text = readEventPeriodTextRaw();
     if (!text) return null;
@@ -582,6 +591,9 @@
     // バナー表示は periodText（開始～終了の文字列）のままで変えない。
     const isTeaser      = /^#teaser\//.test(hash);
     const isEnding      = !isTeaser && detectEventIsEnding(periodText);
+    // 開催終了マーカー (.prt-period.is-event-end)。終了済みイベントの再訪で
+    // 報酬受取期間の未来日が eventEndMs を上書きし「開催中」へ復活するのを防ぐ。
+    const isEventEnd    = !isTeaser && readEventPeriodIsEnded();
     // reward 期間 (#event/N/event_top 等) は parsed 値をそのまま送り、
     // sidepanel 側で isRewardClaim フラグを見て「終了」群に固定する。
     const isRewardClaim = isEventRewardClaimHash(hash);
@@ -589,21 +601,23 @@
     // タブ移動で失われないよう開始/終了時刻を独立して保持。
     // Ending ページは終了時刻が変わるため eventEndMs は送らず既存値を維持させる。
     const eventStartMs  = period?.startMs ?? null;
-    const eventEndMs    = !isEnding ? (period?.endMs ?? null) : null;
-    return { eventName, title, periodText, periodEndMs, hash, isTeaser, isEnding, isRewardClaim, eventStartMs, eventEndMs };
+    // Ending / 開催終了 ページは終了時刻が変わる（または報酬期間に切替わる）ため
+    // eventEndMs は送らず既存値を維持させる。
+    const eventEndMs    = (!isEnding && !isEventEnd) ? (period?.endMs ?? null) : null;
+    return { eventName, title, periodText, periodEndMs, hash, isTeaser, isEnding, isEventEnd, isRewardClaim, eventStartMs, eventEndMs };
   }
 
   function tryReportEventInfo() {
     if (!isContextValid()) return;
     const info = extractEventInfo();
     if (!info) return;
-    // teaser / isEnding のときは periodEndMs を自発履歴キャッシュに混入させない。
-    if (!info.isTeaser && !info.isEnding && Number.isFinite(info.periodEndMs)) {
+    // teaser / isEnding / 開催終了 のときは periodEndMs を自発履歴キャッシュに混入させない。
+    if (!info.isTeaser && !info.isEnding && !info.isEventEnd && Number.isFinite(info.periodEndMs)) {
       cachedEventAdventPeriodEndMs = info.periodEndMs;
     }
-    // 自発時の event 紐付け用 eventName キャッシュ。teaser/ending では更新しない
+    // 自発時の event 紐付け用 eventName キャッシュ。teaser/ending/終了 では更新しない
     // (期限不明なまま hostHistory に書かれて誤照合するのを避ける)。
-    if (!info.isTeaser && !info.isEnding && info.eventName) {
+    if (!info.isTeaser && !info.isEnding && !info.isEventEnd && info.eventName) {
       cachedEventName = info.eventName;
     }
     chrome.runtime.sendMessage({
@@ -615,24 +629,31 @@
       hash:           info.hash,
       isTeaser:       !!info.isTeaser,
       isEnding:       !!info.isEnding,
+      isEventEnd:     !!info.isEventEnd,
       isRewardClaim:  !!info.isRewardClaim,
       eventStartMs:   Number.isFinite(info.eventStartMs) ? info.eventStartMs : null,
       eventEndMs:     Number.isFinite(info.eventEndMs)   ? info.eventEndMs   : null,
     }).catch(() => {});
   }
 
-  // ── mypage グローバルバナー読取り（読取り専用）──────────
-  // .prt-global-banner 内の各 .btn-global-banner[data-href] と .img-global-banner[src] を取得し、
-  // data-href が event/ または teaser/ で始まるものだけ EVENT_BANNER_DETECTED として送信する。
+  // ── mypage 本体バナー読取り（読取り専用）──────────
+  // mypage 本体（.cnt-mypage .prt-banner）内の .prt-global-banner > .btn-global-banner[data-href] と
+  // .img-global-banner[src] を取得し、data-href が event/ または teaser/ で始まるものだけ
+  // EVENT_BANNER_DETECTED として送信する。
+  // 注意: .prt-global-banner はグローバルメニューのポップアップ側にも存在し、本体とは独立して
+  //       柄をランダム描画する。両方を拾うと表示中の柄と食い違うため、必ず .cnt-mypage 配下に限定する。
   // バナーはランダムに切替わるが、sidepanel 側で既存エントリの画像は上書きしない（freeze）。
   function tryReportEventBanners() {
     if (!isContextValid()) return;
-    const btns = document.querySelectorAll('.prt-global-banner .btn-global-banner');
+    const btns = document.querySelectorAll('.cnt-mypage .prt-global-banner .btn-global-banner');
+    if (!btns.length) return; // .cnt-mypage 不在（mypage 以外）のページでは sweep を送らない（誤削除防止）
+    const paths = [];
     btns.forEach(btn => {
       const path = (btn.dataset?.href || '').trim();
       if (!/^(event|teaser)\//.test(path)) return;
       const imgUrl = btn.querySelector('.img-global-banner')?.src || '';
       if (!imgUrl) return;
+      paths.push(path);
       chrome.runtime.sendMessage({
         type:     'EVENT_BANNER_DETECTED',
         path,
@@ -640,6 +661,12 @@
         isTeaser: /^teaser\//.test(path),
       }).catch(() => {});
     });
+    // mypage スイープ完了通知。sidepanel 側で paths に含まれない Teaser を即削除する。
+    chrome.runtime.sendMessage({
+      type:  'MYPAGE_BANNERS_SWEEP',
+      paths,
+      at:    Date.now(),
+    }).catch(() => {});
   }
 
   // ── 難易度カテゴリ判定（自発クリック時のページ文脈から） ─
@@ -940,10 +967,10 @@
     bootEventAdventPeriodCache();
   }
 
-  // 初期ロード時に mypage グローバルバナーを一度読取る
+  // 初期ロード時に mypage 本体バナーを一度読取る
   function bootEventBanners() {
     if (!isContextValid()) return;
-    if ((location.hash || '').indexOf('#mypage') !== 0 && !document.querySelector('.prt-global-banner')) return;
+    if ((location.hash || '').indexOf('#mypage') !== 0 && !document.querySelector('.cnt-mypage .prt-banner')) return;
     setTimeout(tryReportEventBanners, 600);
     setTimeout(tryReportEventBanners, 1800);
   }
@@ -1432,8 +1459,8 @@
       teardownResultDropObserver();
     }
 
-    // mypage グローバルバナー読取り（バナーは非同期描画されるため遅延 2 段）
-    if (hash.indexOf('#mypage') === 0 || document.querySelector('.prt-global-banner')) {
+    // mypage 本体バナー読取り（バナーは非同期描画されるため遅延 2 段）
+    if (hash.indexOf('#mypage') === 0 || document.querySelector('.cnt-mypage .prt-banner')) {
       setTimeout(tryReportEventBanners, 600);
       setTimeout(tryReportEventBanners, 1800);
     }
