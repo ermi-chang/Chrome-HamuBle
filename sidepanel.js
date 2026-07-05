@@ -1580,9 +1580,9 @@ function pruneExpiredEventAdventHosts() {
   return true;
 }
 
-/** raidCategory === 'etc' のうち lastTimestamp が 7 日以上前のものを削除 */
+/** raidCategory === 'etc' のうち lastTimestamp が 2 日以上前のものを削除 */
 function pruneStaleEtcHosts() {
-  const STALE_MS = 7 * 24 * 60 * 60 * 1000;
+  const STALE_MS = 2 * 24 * 60 * 60 * 1000;
   const now = Date.now();
   const catOf = (r) => r.raidCategory || questMeta[r.questId]?.raidCategory || 'etc';
 
