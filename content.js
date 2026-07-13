@@ -753,6 +753,7 @@
         bp,
         bpDecreased,
         isHalf:        !!el.querySelector('.txt-half-campaign'),
+        hasEnterIcon:  !!el.querySelector('.ico-enter'),
         ownerName:     reqEl ? reqEl.textContent.trim() : '不明',
         thumbnailSrc:  thumbSrc,
       });
