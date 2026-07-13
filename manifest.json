@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "HamuBle",
-  "version": "1.4.4",
+  "version": "1.4.5",
   "description": "HamuBle",
   "minimum_chrome_version": "116",
   "permissions": ["tabs", "scripting", "sidePanel", "storage", "webRequest"],

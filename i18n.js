@@ -223,6 +223,7 @@ const TRANSLATIONS = {
     settingsHostCols:     '我的任务列数',
     settingsHideDepleted: '隐藏已完成的任务',
     settingsShowEventBanner: '活动横幅',
+    settingsHideJoined:   '隐藏已参战的救援',
     // Rescue section
     rescueSectionTitle: '救援多人战',
     rescueBtnAssist:    '⚔ 救援请求列表',

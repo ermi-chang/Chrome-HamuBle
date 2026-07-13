@@ -10,6 +10,7 @@ const DEFAULTS = {
   hostCategoryFilters: ['all'],
   hideDepleted: true,
   showEventBanner: true,
+  hideJoined: false,
   lang: 'zh',
 };
 
@@ -18,6 +19,10 @@ const UPDATE_RELEASE_API = 'https://api.github.com/repos/ermi-chang/Chrome-HamuB
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6h
 
 let allRaids    = [];
+// フィルタ経由でクリック参加した raidId の一時ログ。リスト更新（load での再取得）ごとに
+// 全クリアする — 更新後は本体側の ico-enter が参加済みを示すため引き継ぎ不要。
+const JOINED_LOG_MAX = 10;
+const joinedRaidIds = new Set();
 let isLoading   = false;
 let settings    = { ...DEFAULTS };
 let templates   = [];
@@ -143,6 +148,7 @@ const elIconBarPosGroup      = document.getElementById('icon-bar-pos-btns');
 const elHostHistoryColsGroup = document.getElementById('host-history-cols-btns');
 const elHideDepleted    = document.getElementById('hide-depleted');
 const elShowEventBanner = document.getElementById('show-event-banner');
+const elHideJoined      = document.getElementById('hide-joined');
 const elIconBar   = document.getElementById('icon-bar');
 const elDashboard = document.getElementById('dashboard');
 // ダッシュボード内のドロップカレンダー左右ナビ（再描画後も生き残るよう委譲）
@@ -245,6 +251,7 @@ function applySettingsToUI() {
   setPillValue('host-history-cols-btns', String(settings.hostHistoryCols || 3));
   elHideDepleted.checked     = !!settings.hideDepleted;
   elShowEventBanner.checked  = !!settings.showEventBanner;
+  elHideJoined.checked       = !!settings.hideJoined;
   applyIconBarPos();
   applyHostHistoryCols();
   applyHostCategoryFilter();
@@ -320,6 +327,7 @@ function readSettingsFromUI() {
   settings.hostHistoryCols = parseInt(getPillValue('host-history-cols-btns', '3'), 10) || 3;
   settings.hideDepleted    = elHideDepleted.checked;
   settings.showEventBanner = elShowEventBanner.checked;
+  settings.hideJoined      = elHideJoined.checked;
 }
 
 function updateFilterBlockState() {
@@ -628,13 +636,24 @@ async function load(silent = false) {
   isLoading = true;
 
   allRaids = [];
+  // 読み込みテロップは 200ms 以上かかる場合のみ表示する。
+  // 高速に完了するケース（新着タブ切替等）でテロップを挟むと一瞬チラつくため、
+  // その間は直前のリストを表示したまま完了時に直接差し替える。
+  let loadingTelopTimer = null;
   if (!silent) {
-    setListHTML(`<div class="loading-state"><div class="spinner"></div>${t('msgLoading')}</div>`);
-    elCount.innerHTML = t('countEmpty');
+    loadingTelopTimer = setTimeout(() => {
+      loadingTelopTimer = null;
+      setListHTML(`<div class="loading-state"><div class="spinner"></div>${t('msgLoading')}</div>`);
+      elCount.innerHTML = t('countEmpty');
+    }, 200);
   }
+  const clearLoadingTelop = () => {
+    if (loadingTelopTimer) { clearTimeout(loadingTelopTimer); loadingTelopTimer = null; }
+  };
 
   const tab = await getGBFTab();
   if (!tab) {
+    clearLoadingTelop();
     setListHTML(`<div class="err">${t('msgNoGbf')}</div>`);
     done(); return;
   }
@@ -642,6 +661,16 @@ async function load(silent = false) {
     const res = await askContent(tab.id, { type: 'GET_RAIDS' });
     if (!res) throw new Error(t('msgNoResponse'));
     allRaids = res.raids || [];
+    // クリック参加ログの整理: 新リストに存在しない raidId のみ解放する。
+    // RAID_LIST_UPDATED はゲージ変動等の細かい DOM 変化でも発火するため全クリアは不可。
+    // 本当のリスト更新では全件入れ替わって自然に空になり、以降は ico-enter 側で判定される。
+    // 空リストは遷移中の一時状態の可能性があるためログに触らない。
+    if (allRaids.length > 0) {
+      const liveIds = new Set(allRaids.map(r => r.raidId));
+      for (const id of [...joinedRaidIds]) {
+        if (!liveIds.has(id)) joinedRaidIds.delete(id);
+      }
+    }
     // currentBp は救援タブ DOM 上にしか存在しないため、null の場合は前値を保持
     if (typeof res.currentBp === 'number') {
       currentBP = res.currentBp;
@@ -652,8 +681,10 @@ async function load(silent = false) {
     //    救援タブのカード描画は raid オブジェクトの r.thumbnailSrc を直接読むので影響なし。
     const now = new Date();
     elUpdated.textContent = `${now.getHours()}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+    clearLoadingTelop();
     renderFiltered();
   } catch (e) {
+    clearLoadingTelop();
     setListHTML(`<div class="err">${t('msgError', { msg: e.message })}</div>`);
   }
   done();
@@ -1134,6 +1165,10 @@ function openTplNameRow() { tplNameRow.classList.add('open'); tplNameInput.value
 function closeTplNameRow() { tplNameRow.classList.remove('open'); tplNameInput.value = ''; }
 
 // ── Filter / Sort ─────────────────────────────────────
+// 参加済み = 本体の参戦中アイコン(ico-enter) or 現リストでのクリック参加ログ
+function isJoinedRaid(r) {
+  return r.hasEnterIcon || joinedRaidIds.has(r.raidId);
+}
 function filtered() {
   let r = [...allRaids];
   if (settings.hpOn) {
@@ -1146,6 +1181,9 @@ function filtered() {
   }
   if (settings.bpOn) {
     r = r.filter(x => x.bpDecreased);
+  }
+  if (settings.hideJoined) {
+    r = r.filter(x => !isJoinedRaid(x));
   }
   const toSec = t => { if (!t) return 9999999; const p = t.split(':').map(Number).reverse(); return (p[0]||0)+(p[1]||0)*60+(p[2]||0)*3600; };
   switch (settings.sort) {
@@ -1215,7 +1253,7 @@ function render(raids) {
 </div>`;
     }
     return `
-<div class="card" data-raid-id="${esc(r.raidId)}" data-raid-url="${esc(r.raidUrl||'')}"
+<div class="card${isJoinedRaid(r) ? ' joined' : ''}" data-raid-id="${esc(r.raidId)}" data-raid-url="${esc(r.raidUrl||'')}"
      data-thumb="${esc(r.thumbnailSrc)}" data-name="${esc(r.chapterName)}" data-bp="${r.bp|0}" title="${esc(t('raidClickJoin'))}">
   <img class="thumb" src="${esc(r.thumbnailSrc)}" alt="" loading="lazy">
   <div class="info">
@@ -1316,6 +1354,12 @@ async function joinRaid(card, raid) {
       const fullUrl = 'https://game.granbluefantasy.jp/' + raid.raidUrl;
       await chrome.tabs.update(tab.id, { url: fullUrl, active: true });
       card.classList.add('joined');
+      joinedRaidIds.add(raid.raidId);
+      if (joinedRaidIds.size > JOINED_LOG_MAX) {
+        joinedRaidIds.delete(joinedRaidIds.values().next().value);
+      }
+      // 非表示設定 ON なら参加したカードを即座にリストから除去する
+      if (settings.hideJoined) renderFiltered();
     }
   } catch (e) {
     console.error('Join error:', e);
@@ -2484,6 +2528,12 @@ elShowEventBanner.addEventListener('change', () => {
   if (activeTab === 'host-history') renderHostHistory();
 });
 
+elHideJoined.addEventListener('change', () => {
+  readSettingsFromUI();
+  saveAll();
+  if (activeTab === 'rescue') renderFiltered();
+});
+
 btnSettings.addEventListener('click', () => {
   settingsPanel.classList.toggle('open');
   btnSettings.classList.toggle('active', settingsPanel.classList.contains('open'));
@@ -2639,6 +2689,11 @@ const elRecentDropsFooter = document.getElementById('recent-drops-footer');
 const elRecentDropsChips  = document.getElementById('recent-drops-chips');
 const elRecentDropsEmpty  = document.getElementById('recent-drops-empty');
 
+// ドロップアイコン画像（CDN s/.jpg）の存在判定キャッシュ（セッション内のみ、key = "category:itemId"）。
+// NG 判明分は以後描画をスキップし、未判定分は load 成功まで hidden にする。
+const dropIconOkKeys = new Set();
+const dropIconNgKeys = new Set();
+
 function renderRecentDropsFooter() {
   if (!elRecentDropsFooter) return;
   if (!Array.isArray(lastResultDrops) || lastResultDrops.length === 0) {
@@ -2650,6 +2705,9 @@ function renderRecentDropsFooter() {
   if (!elRecentDropsChips) return;
 
   elRecentDropsChips.innerHTML = lastResultDrops.map(d => {
+    const key = `${d.category}:${d.itemId}`;
+    // s サイズ画像が存在しないと判明済みのアイテム（event/article 等）は描画しない
+    if (dropIconNgKeys.has(key)) return '';
     const registeredWatch = findWatchByKey(d.category, d.itemId);
     const registered = !!registeredWatch;
     // 表示は s/.jpg 固定。既ウォッチ済みなら base64 dump (iconCached) を優先 → ストレージから瞬時表示。
@@ -2657,19 +2715,28 @@ function renderRecentDropsFooter() {
     const iconSrc = (registeredWatch && registeredWatch.iconCached)
       ? registeredWatch.iconCached
       : buildIconUrl(d.category, d.itemId);
+    // 画像の有無が未判定のチップは load 成功まで hidden にしてチラつき
+    // （破損アイコンが一瞬表示 → 消える）を防ぐ
+    const pendingIcon = !(registeredWatch && registeredWatch.iconCached) && !dropIconOkKeys.has(key);
     const countBadge = (d.count > 1)
       ? `<span class="recent-drop-count">×${d.count}</span>` : '';
     const checkBadge = registered ? `<span class="recent-drop-check">✓</span>` : '';
     const cls = `recent-drop-chip${registered ? ' is-registered' : ''}`;
     const title = registered ? t('recentDropAddedTitle') : t('recentDropAddTitle');
-    return `<button class="${cls}" data-cat="${esc(d.category)}" data-id="${esc(d.itemId)}" title="${esc(title)}" loading="lazy">
-      <img src="${esc(iconSrc)}" alt="" loading="lazy" decoding="async">
+    return `<button class="${cls}"${pendingIcon ? ' hidden' : ''} data-cat="${esc(d.category)}" data-id="${esc(d.itemId)}" title="${esc(title)}">
+      <img src="${esc(iconSrc)}" alt="" decoding="async">
       ${countBadge}
       ${checkBadge}
     </button>`;
   }).join('');
 
   elRecentDropsChips.querySelectorAll('.recent-drop-chip').forEach(chip => {
+    const img = chip.querySelector('img');
+    if (img) {
+      const key = `${chip.dataset.cat}:${chip.dataset.id}`;
+      img.addEventListener('load',  () => { dropIconOkKeys.add(key); chip.hidden = false; });
+      img.addEventListener('error', () => { dropIconNgKeys.add(key); chip.hidden = true; });
+    }
     chip.addEventListener('click', () => {
       if (chip.classList.contains('is-registered')) return; // 既登録は no-op
       const cat = chip.dataset.cat;
