@@ -200,6 +200,7 @@ const TRANSLATIONS = {
     weekdaySat:           '周六',
     weekdaySun:           '周日',
     dashDropEmpty:        '尚未记录到目标掉落',
+    dashDropShotTitle:    '复制本月日历截图',
     // Drop watch settings (v2: icon-chip UI)
     settingsDropWatchTitle:   '掉落监视',
     settingsDropResetAll:     '清空记录',
@@ -224,6 +225,7 @@ const TRANSLATIONS = {
     settingsHideDepleted: '隐藏已完成的任务',
     settingsShowEventBanner: '活动横幅',
     settingsHideJoined:   '隐藏已参战的救援',
+    settingsKeepDropLog:  '移除监视目标时保留掉落记录',
     // Rescue section
     rescueSectionTitle: '救援多人战',
     rescueBtnAssist:    '⚔ 救援请求列表',

@@ -11,6 +11,7 @@ const DEFAULTS = {
   hideDepleted: true,
   showEventBanner: true,
   hideJoined: false,
+  keepDropLogOnRemove: false,
   lang: 'zh',
 };
 
@@ -44,6 +45,10 @@ let dropEvents     = [];  // [{ watchId, at, count }, ...]  新しいものが�
 // カレンダー表示中の月（year, month: 0-11）。初期値 = 今月。`<`/`>` で前後月へ移動。
 let calendarMonth  = (() => { const n = new Date(); return { year: n.getFullYear(), month: n.getMonth() }; })();
 let dropWatch      = [];  // [{ id, name, category, itemId, iconCached, addedAt }]
+// ログ保持設定 ON で watch を削除した際のメタ退避先（カレンダー描画で参照）。
+// dropEvents に watchId が残っている間だけ保持し、pruneDropWatchArchive() で掃除。
+const DROP_WATCH_ARCHIVE_MAX = 40;
+let dropWatchArchive = [];  // [{ id, name, category, itemId, iconCached, removedAt }]
 let seenResultKeys = {};  // { [resultKey]: detectedAt }  二重カウント防止（古いものは TTL で掃除）
 const SEEN_RESULT_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 日
 
@@ -149,8 +154,11 @@ const elHostHistoryColsGroup = document.getElementById('host-history-cols-btns')
 const elHideDepleted    = document.getElementById('hide-depleted');
 const elShowEventBanner = document.getElementById('show-event-banner');
 const elHideJoined      = document.getElementById('hide-joined');
+const elKeepDropLog     = document.getElementById('keep-drop-log');
 const elIconBar   = document.getElementById('icon-bar');
 const elDashboard = document.getElementById('dashboard');
+// カレンダースクショ生成中フラグ（連打防止。再描画でボタンが差し替わっても効く）
+let calShotBusy = false;
 // ダッシュボード内のドロップカレンダー左右ナビ（再描画後も生き残るよう委譲）
 if (elDashboard) {
   elDashboard.addEventListener('click', (e) => {
@@ -159,6 +167,15 @@ if (elDashboard) {
       if (calendarMonth.month === 0) { calendarMonth.year--; calendarMonth.month = 11; }
       else calendarMonth.month--;
       renderDashboard();
+      return;
+    }
+    const shot = e.target.closest('.dash-drop-cal-shot');
+    if (shot) {
+      if (calShotBusy) return;
+      calShotBusy = true;
+      shot.disabled = true;
+      exportDropCalendarPNG()
+        .then(() => flashCalShotButton('✓'), () => flashCalShotButton('✕'));
       return;
     }
     const next = e.target.closest('.dash-drop-cal-next');
@@ -252,6 +269,7 @@ function applySettingsToUI() {
   elHideDepleted.checked     = !!settings.hideDepleted;
   elShowEventBanner.checked  = !!settings.showEventBanner;
   elHideJoined.checked       = !!settings.hideJoined;
+  elKeepDropLog.checked      = !!settings.keepDropLogOnRemove;
   applyIconBarPos();
   applyHostHistoryCols();
   applyHostCategoryFilter();
@@ -328,6 +346,7 @@ function readSettingsFromUI() {
   settings.hideDepleted    = elHideDepleted.checked;
   settings.showEventBanner = elShowEventBanner.checked;
   settings.hideJoined      = elHideJoined.checked;
+  settings.keepDropLogOnRemove = elKeepDropLog.checked;
 }
 
 function updateFilterBlockState() {
@@ -1088,6 +1107,7 @@ chrome.runtime.onMessage.addListener((message) => {
       dropEvents.unshift({ watchId: wid, at: now, count: cnt });
     }
     pruneDropEvents();
+    if (pruneDropWatchArchive()) saveDropWatchArchive();
     chrome.storage.local.set({ gbfRfDropEvents: dropEvents, gbfRfSeenResultKeys: seenResultKeys });
     if (activeTab === 'dashboard') renderDashboard();
   } else if (message.type === 'RECENT_DROPS_DETECTED') {
@@ -1669,15 +1689,19 @@ function migrateHostHistoryIfNeeded(raw) {
 
 async function loadHostHistory() {
   return new Promise(resolve => {
-    chrome.storage.local.get(['gbfRfHostHistory', 'gbfRfQuestMeta', 'gbfRfHostHistoryDate', 'gbfRfEnemyImgCache', 'gbfRfActiveEvents', 'gbfRfEventBanners', 'gbfRfDropEvents', 'gbfRfDropWatch', 'gbfRfSeenResultKeys'], data => {
+    chrome.storage.local.get(['gbfRfHostHistory', 'gbfRfQuestMeta', 'gbfRfHostHistoryDate', 'gbfRfEnemyImgCache', 'gbfRfActiveEvents', 'gbfRfEventBanners', 'gbfRfDropEvents', 'gbfRfDropWatch', 'gbfRfDropWatchArchive', 'gbfRfSeenResultKeys'], data => {
       // ドロップ取得イベント（時系列）と ウォッチリスト
       dropEvents     = Array.isArray(data.gbfRfDropEvents)
         ? data.gbfRfDropEvents.filter(e => e && typeof e === 'object' && e.watchId)
+        : [];
+      dropWatchArchive = Array.isArray(data.gbfRfDropWatchArchive)
+        ? data.gbfRfDropWatchArchive.filter(a => a && typeof a === 'object' && a.id)
         : [];
       seenResultKeys = (data.gbfRfSeenResultKeys && typeof data.gbfRfSeenResultKeys === 'object') ? data.gbfRfSeenResultKeys : {};
 
       // TTL + 件数上限でトリム。差分があれば書き戻す。
       if (pruneDropEvents()) chrome.storage.local.set({ gbfRfDropEvents: dropEvents });
+      if (pruneDropWatchArchive()) saveDropWatchArchive();
 
       // 旧 gbfRfDropLog（累計合算形式）は廃止 → 1 回だけ掃除
       chrome.storage.local.remove('gbfRfDropLog');
@@ -1691,7 +1715,8 @@ async function loadHostHistory() {
       if (!rawWatch || isLegacyFormat) {
         dropWatch = DEFAULT_DROP_WATCH.map(w => ({ ...w, addedAt: Date.now() }));
         dropEvents = [];
-        chrome.storage.local.set({ gbfRfDropWatch: dropWatch, gbfRfDropEvents: dropEvents });
+        dropWatchArchive = [];
+        chrome.storage.local.set({ gbfRfDropWatch: dropWatch, gbfRfDropEvents: dropEvents, gbfRfDropWatchArchive: dropWatchArchive });
       } else {
         dropWatch = rawWatch;
       }
@@ -2241,13 +2266,40 @@ function pruneDropEvents() {
   return dropEvents.length !== before;
 }
 
+// ── watch archive の掃除 ─────────────────────────────
+// dropEvents に watchId が 1 件も残っていないエントリを削除し、それでも上限超過なら
+// removedAt の新しい順に切り詰める（iconCached の dataURL 滞留防止）。変更有無を boolean で返す。
+function pruneDropWatchArchive() {
+  if (dropWatchArchive.length === 0) return false;
+  const before = dropWatchArchive.length;
+  const liveIds = new Set();
+  for (const e of dropEvents) if (e && e.watchId) liveIds.add(e.watchId);
+  dropWatchArchive = dropWatchArchive.filter(a => a && a.id && liveIds.has(a.id));
+  if (dropWatchArchive.length > DROP_WATCH_ARCHIVE_MAX) {
+    dropWatchArchive.sort((a, b) => (b.removedAt || 0) - (a.removedAt || 0));
+    dropWatchArchive = dropWatchArchive.slice(0, DROP_WATCH_ARCHIVE_MAX);
+  }
+  return dropWatchArchive.length !== before;
+}
+
+function saveDropWatchArchive() {
+  chrome.storage.local.set({ gbfRfDropWatchArchive: dropWatchArchive });
+}
+
+// watch を dropWatch → dropWatchArchive の順で解決（どちらにも無ければ null）
+function findWatchAny(watchId) {
+  return dropWatch.find(x => x && x.id === watchId)
+      || dropWatchArchive.find(x => x && x.id === watchId)
+      || null;
+}
+
 // ローカル時刻の YYYY-MM-DD キー
 function ymd(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
 
-// ── ドロップカレンダー HTML 生成（月単位、月曜始まり、左右ナビ） ────
-// `calendarMonth` の月の 1 日含む週の月曜 〜 末日含む週の日曜までを描画。
-// 各セルは [icon]×N をその日に集約。土曜/日曜/今日/当月外でスタイル分岐。
-function buildDropLogHTML() {
+// ── ドロップカレンダーの表示モデル計算（HTML 生成と PNG 生成で共用） ──
+// `calendarMonth` の月の 1 日含む週の月曜 〜 末日含む週の日曜までの範囲と、
+// 日付キー -> Map<watchId, count> の集約を返す。
+function computeDropCalendarModel() {
   const y = calendarMonth.year, m = calendarMonth.month;
   const firstOfMonth = new Date(y, m, 1);
   const lastOfMonth  = new Date(y, m + 1, 0);
@@ -2268,6 +2320,14 @@ function buildDropLogHTML() {
     if (!perDay) { perDay = new Map(); byDay.set(key, perDay); }
     perDay.set(ev.watchId, (perDay.get(ev.watchId) || 0) + ev.count);
   }
+
+  return { y, m, startDate, endDate, totalDays, byDay, monthLabel: `${y}-${pad(m + 1)}` };
+}
+
+// ── ドロップカレンダー HTML 生成（月単位、月曜始まり、左右ナビ） ────
+// 各セルは [icon]×N をその日に集約。土曜/日曜/今日/当月外でスタイル分岐。
+function buildDropLogHTML() {
+  const { y, m, startDate, totalDays, byDay, monthLabel } = computeDropCalendarModel();
 
   // 曜日ヘッダ（月曜始まり、土日に別色）
   const headKeys = ['weekdayMon','weekdayTue','weekdayWed','weekdayThu','weekdayFri','weekdaySat','weekdaySun'];
@@ -2295,7 +2355,7 @@ function buildDropLogHTML() {
     if (perDay) {
       const parts = [];
       for (const [watchId, count] of perDay) {
-        const w = dropWatch.find(x => x && x.id === watchId);
+        const w = findWatchAny(watchId);
         if (!w) continue;
         const iconSrc = w.iconCached || buildIconUrl(w.category, w.itemId);
         const label   = w.name || `${w.category}/${w.itemId}`;
@@ -2316,18 +2376,204 @@ function buildDropLogHTML() {
 
   // 月ナビ（>: 今月で disabled）
   const canNext = (y < now.getFullYear()) || (y === now.getFullYear() && m < now.getMonth());
-  const monthLabel = `${y}-${pad(m + 1)}`;
 
   return `
     <div class="dash-section">
       <div class="dash-drop-cal-nav">
         <button class="dash-drop-cal-prev" type="button">‹</button>
-        <span class="dash-drop-cal-month">${esc(monthLabel)}</span>
+        <span class="dash-drop-cal-mid">
+          <span class="dash-drop-cal-month">${esc(monthLabel)}</span>
+          <button class="dash-drop-cal-shot" type="button" title="${esc(t('dashDropShotTitle'))}"${calShotBusy ? ' disabled' : ''}>📷</button>
+        </span>
         <button class="dash-drop-cal-next" type="button"${canNext ? '' : ' disabled'}>›</button>
       </div>
       <div class="dash-drop-cal-head">${head}</div>
       <div class="dash-drop-cal">${cells.join('')}</div>
     </div>`;
+}
+
+// ── ドロップカレンダーのスクショ生成（クリップボードへコピー） ────────
+// 表示中の月を Canvas 2D に手描きし PNG 化して navigator.clipboard.write() でコピーする。
+// アイコンは iconCached（base64 dataURL）のみ描画。CDN 直 URL は canvas を汚染して
+// toBlob が失敗するため描かず、プレースホルダ（矩形 + ?）に落とす。
+async function exportDropCalendarPNG() {
+  const model = computeDropCalendarModel();
+
+  // 月内に出現する watchId を解決し、iconCached をプリロード
+  const iconMap = new Map();  // watchId -> { w, img: Image|null }
+  for (const perDay of model.byDay.values()) {
+    for (const wid of perDay.keys()) {
+      if (iconMap.has(wid)) continue;
+      const w = findWatchAny(wid);
+      if (w) iconMap.set(wid, { w, img: null });
+    }
+  }
+  await Promise.all([...iconMap.values()].map(async ent => {
+    if (!ent.w.iconCached) return;
+    try {
+      const img = new Image();
+      img.src = ent.w.iconCached;
+      await img.decode();
+      ent.img = img;
+    } catch { /* decode 失敗はプレースホルダ */ }
+  }));
+
+  // レイアウト（論理 px、SCALE=2 固定でパネル幅・DPI に依らず同じ出力にする）
+  const SCALE = 2;
+  const PAD = 12, TITLE_H = 26, HEAD_H = 18, CELL_W = 100, CELL_H = 80, GAP = 3;
+  const weeks = model.totalDays / 7;
+  const W = PAD * 2 + CELL_W * 7 + GAP * 6;
+  const H = PAD * 2 + TITLE_H + HEAD_H + weeks * CELL_H + (weeks - 1) * GAP;
+
+  const cssVar = (name, fb) =>
+    (getComputedStyle(document.documentElement).getPropertyValue(name) || '').trim() || fb;
+  const C = {
+    bg1: cssVar('--bg1', '#1b1e24'),
+    bg2: cssVar('--bg2', '#242832'),
+    tx0: cssVar('--tx0', '#e6e9ef'),
+    tx2: cssVar('--tx2', '#8b93a3'),
+    acc: cssVar('--acc', '#4da3ff'),
+    sat: '#8aa8d8', sun: '#d88a8a',
+    satBg: 'rgba(110, 140, 190, 0.15)', sunBg: 'rgba(190, 110, 110, 0.15)',
+  };
+  const family = getComputedStyle(document.body).fontFamily || 'sans-serif';
+
+  const canvas = document.createElement('canvas');
+  canvas.width  = W * SCALE;
+  canvas.height = H * SCALE;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(SCALE, SCALE);
+  ctx.fillStyle = C.bg1;
+  ctx.fillRect(0, 0, W, H);
+
+  // 月ラベル
+  ctx.fillStyle = C.tx0;
+  ctx.font = `bold 16px ${family}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(model.monthLabel, W / 2, PAD + TITLE_H / 2);
+
+  // 曜日ヘッダ（土日に別色）
+  const headKeys = ['weekdayMon','weekdayTue','weekdayWed','weekdayThu','weekdayFri','weekdaySat','weekdaySun'];
+  ctx.font = `12px ${family}`;
+  for (let i = 0; i < 7; i++) {
+    ctx.fillStyle = i === 5 ? C.sat : i === 6 ? C.sun : C.tx2;
+    ctx.fillText(t(headKeys[i]), PAD + i * (CELL_W + GAP) + CELL_W / 2, PAD + TITLE_H + HEAD_H / 2);
+  }
+
+  // セル
+  const todayKey = ymd(new Date());
+  const gridTop = PAD + TITLE_H + HEAD_H;
+  for (let i = 0; i < model.totalDays; i++) {
+    const d = new Date(model.startDate); d.setDate(model.startDate.getDate() + i);
+    const col = i % 7, row = Math.floor(i / 7);
+    const x = PAD + col * (CELL_W + GAP);
+    const yTop = gridTop + row * (CELL_H + GAP);
+    const key = ymd(d);
+
+    ctx.save();
+    if (d.getMonth() !== model.m) ctx.globalAlpha = 0.45;  // 当月外
+    ctx.fillStyle = C.bg2;
+    ctx.fillRect(x, yTop, CELL_W, CELL_H);
+    if (col === 5) { ctx.fillStyle = C.satBg; ctx.fillRect(x, yTop, CELL_W, CELL_H); }
+    if (col === 6) { ctx.fillStyle = C.sunBg; ctx.fillRect(x, yTop, CELL_W, CELL_H); }
+
+    // 日付数字
+    ctx.fillStyle = C.tx2;
+    ctx.font = `12px ${family}`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText(String(d.getDate()), x + 4, yTop + 4);
+
+    // アイテム（icon + ×N）。セル内の余白を活かすため、全アイテムが収まる
+    // 最大アイコンサイズを試算してから描画する（収まらない分は +n で打ち切り）。
+    const perDay = model.byDay.get(key);
+    if (perDay) {
+      const entries = [...perDay].filter(([wid]) => iconMap.has(wid));
+      if (entries.length > 0) {
+        const IGAP = 4;
+        const areaX = x + 4, areaY = yTop + 20;
+        const areaW = CELL_W - 8, areaH = yTop + CELL_H - 4 - areaY;
+        const labelFont = s => `bold ${Math.max(10, Math.round(s * 0.45))}px ${family}`;
+
+        // wrap レイアウトを試算し、areaW×areaH に全件収まるか判定
+        const fits = (size) => {
+          ctx.font = labelFont(size);
+          const lineH = size + 3;
+          let cx = 0, cy = 0;
+          for (const [, count] of entries) {
+            const w = size + 2 + ctx.measureText(`×${count}`).width;
+            if (cx > 0 && cx + w > areaW) { cx = 0; cy += lineH; }
+            if (cy + size > areaH) return false;
+            cx += w + IGAP;
+          }
+          return true;
+        };
+        let size = Math.min(52, areaH);
+        for (; size > 14; size -= 2) { if (fits(size)) break; }
+
+        ctx.font = labelFont(size);
+        const lineH = size + 3;
+        let cx = areaX, cy = areaY, drawn = 0;
+        for (const [wid, count] of entries) {
+          const label = `×${count}`;
+          const itemW = size + 2 + ctx.measureText(label).width;
+          if (cx > areaX && cx + itemW > areaX + areaW) { cx = areaX; cy += lineH; }
+          if (cy + size > areaY + areaH) {
+            // 最小サイズでも収まらない残数
+            ctx.fillStyle = C.tx2;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            ctx.fillText(`+${entries.length - drawn}`, cx, yTop + CELL_H - 18);
+            break;
+          }
+          const ent = iconMap.get(wid);
+          if (ent.img) {
+            ctx.drawImage(ent.img, cx, cy, size, size);
+          } else {
+            ctx.fillStyle = C.bg1;
+            ctx.fillRect(cx, cy, size, size);
+            ctx.fillStyle = C.tx2;
+            ctx.font = `${Math.round(size * 0.5)}px ${family}`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('?', cx + size / 2, cy + size / 2);
+            ctx.font = labelFont(size);
+          }
+          ctx.fillStyle = C.acc;
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(label, cx + size + 2, cy + size / 2);
+          cx += itemW + IGAP;
+          drawn++;
+        }
+      }
+    }
+
+    // 今日枠
+    if (key === todayKey) {
+      ctx.strokeStyle = C.acc;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 0.5, yTop + 0.5, CELL_W - 1, CELL_H - 1);
+    }
+    ctx.restore();
+  }
+
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+  if (!blob) throw new Error('toBlob failed');
+  await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+}
+
+// スクショボタンの結果フィードバック。✓/✕ を約 1.5 秒表示してから復帰。
+// 再描画でボタン要素が差し替わっている可能性があるため毎回引き直す。
+function flashCalShotButton(mark) {
+  const btn = elDashboard?.querySelector('.dash-drop-cal-shot');
+  if (btn) { btn.textContent = mark; btn.disabled = true; }
+  setTimeout(() => {
+    calShotBusy = false;
+    const b = elDashboard?.querySelector('.dash-drop-cal-shot');
+    if (b) { b.textContent = '📷'; b.removeAttribute('disabled'); }
+  }, 1500);
 }
 
 // ── ダッシュボード レンダリング ────────────────────────
@@ -2534,6 +2780,12 @@ elHideJoined.addEventListener('change', () => {
   if (activeTab === 'rescue') renderFiltered();
 });
 
+// ログ保持設定は今後の削除操作にのみ効くため再描画不要
+elKeepDropLog.addEventListener('change', () => {
+  readSettingsFromUI();
+  saveAll();
+});
+
 btnSettings.addEventListener('click', () => {
   settingsPanel.classList.toggle('open');
   btnSettings.classList.toggle('active', settingsPanel.classList.contains('open'));
@@ -2557,6 +2809,17 @@ function findWatchByKey(category, itemId) {
   return dropWatch.find(w => w.category === category && String(w.itemId) === String(itemId));
 }
 
+// 再追加時の復元: archive に同 id（makeWatchId は決定的）が残っていれば
+// name / iconCached を新エントリへ引き継ぎ、archive から除去する。
+function restoreWatchFromArchive(entry) {
+  const arch = dropWatchArchive.find(a => a && a.id === entry.id);
+  if (!arch) return;
+  if (!entry.name && arch.name) entry.name = arch.name;
+  if (arch.iconCached) entry.iconCached = arch.iconCached;
+  dropWatchArchive = dropWatchArchive.filter(a => a && a.id !== entry.id);
+  saveDropWatchArchive();
+}
+
 // 未キャッシュのアイコンを background に取りに行く。pending Set で重複抑制。
 function ensureDropIconsCached() {
   for (const w of dropWatch) {
@@ -2576,14 +2839,16 @@ function addDropWatchFromUrl(url) {
   if (!p) return { ok: false, reason: 'invalid' };
   if (findWatchByKey(p.category, p.itemId)) return { ok: false, reason: 'dup' };
   if (dropWatch.length >= DROP_WATCH_MAX) return { ok: false, reason: 'limit' };
-  dropWatch.push({
+  const entry = {
     id:         makeWatchId(p.category, p.itemId),
     name:       '',
     category:   p.category,
     itemId:     p.itemId,
     iconCached: '',
     addedAt:    Date.now(),
-  });
+  };
+  restoreWatchFromArchive(entry);
+  dropWatch.push(entry);
   saveDropWatch();
   ensureDropIconsCached();
   return { ok: true };
@@ -2595,14 +2860,16 @@ function addDropWatchFromObserved(category, itemId) {
   if (!category || !itemId) return { ok: false, reason: 'invalid' };
   if (findWatchByKey(category, itemId)) return { ok: false, reason: 'dup' };
   if (dropWatch.length >= DROP_WATCH_MAX) return { ok: false, reason: 'limit' };
-  dropWatch.push({
+  const entry = {
     id:         makeWatchId(category, itemId),
     name:       '',
     category,
     itemId:     String(itemId),
     iconCached: '',
     addedAt:    Date.now(),
-  });
+  };
+  restoreWatchFromArchive(entry);
+  dropWatch.push(entry);
   saveDropWatch();
   ensureDropIconsCached();
   return { ok: true };
@@ -2629,12 +2896,28 @@ function renderDropWatchEditor() {
       if (!Number.isInteger(idx)) return;
       const removed = dropWatch[idx];
       dropWatch.splice(idx, 1);
-      // 取得イベントから該当 watchId のものを削除（ダッシュボードから消える）
       if (removed) {
-        const before = dropEvents.length;
-        dropEvents = dropEvents.filter(ev => ev && ev.watchId !== removed.id);
-        if (dropEvents.length !== before) {
-          chrome.storage.local.set({ gbfRfDropEvents: dropEvents });
+        if (settings.keepDropLogOnRemove) {
+          // ログ保持: メタ情報を archive へ退避（カレンダー描画で参照し続ける）
+          dropWatchArchive = dropWatchArchive.filter(a => a && a.id !== removed.id);
+          dropWatchArchive.push({
+            id: removed.id, name: removed.name, category: removed.category,
+            itemId: removed.itemId, iconCached: removed.iconCached, removedAt: Date.now(),
+          });
+          pruneDropWatchArchive();  // イベントが 1 件も無い watch を消した場合の即掃除
+          saveDropWatchArchive();
+        } else {
+          // 取得イベントから該当 watchId のものを削除（ダッシュボードから消える）
+          const before = dropEvents.length;
+          dropEvents = dropEvents.filter(ev => ev && ev.watchId !== removed.id);
+          if (dropEvents.length !== before) {
+            chrome.storage.local.set({ gbfRfDropEvents: dropEvents });
+          }
+          // 過去に設定 ON で退避した archive が残っていれば孤児化するので除去
+          if (dropWatchArchive.some(a => a && a.id === removed.id)) {
+            dropWatchArchive = dropWatchArchive.filter(a => a && a.id !== removed.id);
+            saveDropWatchArchive();
+          }
         }
       }
       saveDropWatch();
@@ -2678,7 +2961,8 @@ if (btnDropReset) {
     if (!confirm(t('settingsDropResetConfirm'))) return;
     dropEvents = [];
     seenResultKeys = {};
-    chrome.storage.local.set({ gbfRfDropEvents: dropEvents, gbfRfSeenResultKeys: seenResultKeys });
+    dropWatchArchive = [];  // イベント全消しに伴い archive も存在意義を失う
+    chrome.storage.local.set({ gbfRfDropEvents: dropEvents, gbfRfSeenResultKeys: seenResultKeys, gbfRfDropWatchArchive: dropWatchArchive });
     if (activeTab === 'dashboard') renderDashboard();
     renderRecentDropsFooter();
   });

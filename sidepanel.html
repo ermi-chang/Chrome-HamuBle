@@ -248,6 +248,13 @@
     }
     .dash-drop-cal-next[disabled] { opacity: 0.4; cursor: not-allowed; }
     .dash-drop-cal-month { color: var(--tx0); font-weight: 700; font-size: 12px; }
+    .dash-drop-cal-mid { display: inline-flex; align-items: center; gap: 6px; }
+    .dash-drop-cal-shot {
+      background: var(--bg2); border: 1px solid var(--bdr); color: var(--tx1);
+      border-radius: 4px; padding: 1px 6px; font-size: 11px; cursor: pointer;
+    }
+    .dash-drop-cal-shot:hover:not([disabled]) { background: var(--bg1); color: var(--tx0); }
+    .dash-drop-cal-shot[disabled] { opacity: 0.4; cursor: default; }
 
     .dash-drop-cal-head {
       display: grid; grid-template-columns: repeat(7, 1fr);
@@ -1078,6 +1085,10 @@
   <div class="setting-row">
     <span class="setting-lbl" data-i18n="settingsHideJoined">参加済みマルチを非表示</span>
     <input type="checkbox" id="hide-joined">
+  </div>
+  <div class="setting-row">
+    <span class="setting-lbl" data-i18n="settingsKeepDropLog">移除监视目标时保留掉落记录</span>
+    <input type="checkbox" id="keep-drop-log">
   </div>
   <div class="setting-block setting-drop-watch">
     <div class="setting-block-head">
