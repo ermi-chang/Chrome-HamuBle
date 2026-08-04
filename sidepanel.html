@@ -569,6 +569,29 @@
     }
     .host-header-title { font-size: 12px; font-weight: 600; color: var(--acc); }
     .host-header-date { font-size: 10px; color: var(--tx2); }
+    /* ── Host tool bar ── */
+    .host-tool-bar {
+      display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+      padding: 5px 10px;
+      background: var(--bg2); border-bottom: 1px solid var(--bdr);
+      flex-shrink: 0;
+    }
+    .host-tool-btn {
+      display: inline-flex; align-items: center; gap: 4px;
+      background: none; border: 1px solid var(--bdr2); border-radius: var(--r-pill);
+      color: var(--tx2); font-size: 11px; line-height: 1; cursor: pointer;
+      padding: 4px 9px; font-family: inherit; white-space: nowrap;
+      transition: color .15s, border-color .15s, background .15s;
+    }
+    .host-tool-btn .htb-ico { font-size: 12px; line-height: 1; }
+    .host-tool-btn:hover { color: var(--tx1); border-color: var(--acc); }
+    .host-tool-btn.active {
+      color: var(--bg0); background: var(--acc); border-color: var(--acc); font-weight: 700;
+    }
+    /* 上限解除トグルの ON 色はタイル側の解除バッジと揃える */
+    #btn-depleted-override.active {
+      background: var(--cat-event); border-color: var(--cat-event);
+    }
 
     /* ── Rescue tab header ── */
     .rescue-header {
@@ -847,6 +870,9 @@
     .host-count-badge .hc-sep { color: var(--tx2); }
     .host-count-badge .hc-max { color: var(--tx2); }
     .host-count-badge.depleted .hc-current { color: var(--red); }
+    /* 本日上限解除中: 残り回数ではなく本日の実自発回数を表示していることを示す */
+    .host-count-badge.override .hc-badge-mark { font-size: 9px; font-weight: 400; color: var(--tx2); margin-right: 2px; }
+    .host-count-badge.override .hc-current { color: var(--cat-event, var(--acc)); }
     .host-tile-time { font-size: 8px; color: var(--tx2); }
     /* hell skip 回数プルダウン (.host-tile-info は pointer-events:none なので auto で受け直す) */
     .hell-skip-select {
@@ -860,11 +886,8 @@
     .hell-skip-select:hover { border-color: var(--acc); }
 
     /* ── Host history delete buttons ── */
-    .host-clear-all {
-      background: none; border: 1px solid var(--bdr2); border-radius: var(--r-sm);
-      color: var(--tx2); font-size: 12px; cursor: pointer; padding: 2px 6px;
-      transition: color .15s, border-color .15s;
-    }
+    /* 全削除は破壊的操作なので右端に離して配置し、hover を赤にする */
+    .host-clear-all { margin-left: auto; }
     .host-clear-all:hover { color: var(--red); border-color: var(--red); }
     .host-del {
       position: absolute; top: 2px; right: 2px;
@@ -1075,10 +1098,6 @@
     </div>
   </div>
   <div class="setting-row">
-    <span class="setting-lbl" data-i18n="settingsHideDepleted">完了したクエストを非表示</span>
-    <input type="checkbox" id="hide-depleted">
-  </div>
-  <div class="setting-row">
     <span class="setting-lbl" data-i18n="settingsShowEventBanner">イベントバナー</span>
     <input type="checkbox" id="show-event-banner">
   </div>
@@ -1200,7 +1219,20 @@
     <span class="host-header-title" data-i18n="hostTitle">マイクエスト</span>
     <span class="host-header-date" id="host-date"></span>
   </div>
-  <button class="host-clear-all" id="btn-clear-history" data-i18n-title="hostClearTitle">🗑</button>
+</div>
+
+<!-- Host tool bar (host-history only) -->
+<!-- 使用頻度は低いが意味が推測しづらい操作なので、アイコン単独ではなくラベル付きで常時見せる -->
+<div class="host-tool-bar host-only">
+  <button class="host-tool-btn" id="btn-hide-depleted" data-i18n-title="settingsHideDepleted">
+    <span class="htb-ico">👁</span><span data-i18n="hostToolHideDepleted">隐藏已完成</span>
+  </button>
+  <button class="host-tool-btn" id="btn-depleted-override" data-i18n-title="hostOverrideTitle">
+    <span class="htb-ico">🔓</span><span data-i18n="hostToolOverride">解除上限</span>
+  </button>
+  <button class="host-tool-btn host-clear-all" id="btn-clear-history" data-i18n-title="hostClearTitle">
+    <span class="htb-ico">🗑</span><span data-i18n="hostToolClear">清空</span>
+  </button>
 </div>
 
 <!-- Host category filter (host-history only) -->

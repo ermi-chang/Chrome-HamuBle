@@ -275,6 +275,11 @@ const TRANSLATIONS = {
     hostRemainingPost:     ' 次',
     hostTodayCountSuffix:  '次',
     hostHellSkipOptSuffix: '次',
+    hostOverrideTitle:     '解除今日的自发次数上限（灰色任务）。活动或月卡增加次数时使用',
+    hostOverrideBadge:     '已解除',
+    hostToolHideDepleted:  '隐藏已完成',
+    hostToolOverride:      '解除上限',
+    hostToolClear:         '清空',
     // Category chip labels
     catEvent: '活动',
     catFree:  '自由',

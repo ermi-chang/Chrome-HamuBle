@@ -151,7 +151,9 @@ const elSort    = document.getElementById('sort');
 
 const elIconBarPosGroup      = document.getElementById('icon-bar-pos-btns');
 const elHostHistoryColsGroup = document.getElementById('host-history-cols-btns');
-const elHideDepleted    = document.getElementById('hide-depleted');
+// 完了クエスト非表示 / 本日上限解除は設定パネルではなくマイクエストヘッダのトグル
+const btnHideDepleted     = document.getElementById('btn-hide-depleted');
+const btnDepletedOverride = document.getElementById('btn-depleted-override');
 const elShowEventBanner = document.getElementById('show-event-banner');
 const elHideJoined      = document.getElementById('hide-joined');
 const elKeepDropLog     = document.getElementById('keep-drop-log');
@@ -266,7 +268,7 @@ function applySettingsToUI() {
   elSort.value       = settings.sort;
   setPillValue('icon-bar-pos-btns',      settings.iconBarPos || 'left');
   setPillValue('host-history-cols-btns', String(settings.hostHistoryCols || 3));
-  elHideDepleted.checked     = !!settings.hideDepleted;
+  btnHideDepleted.classList.toggle('active', !!settings.hideDepleted);
   elShowEventBanner.checked  = !!settings.showEventBanner;
   elHideJoined.checked       = !!settings.hideJoined;
   elKeepDropLog.checked      = !!settings.keepDropLogOnRemove;
@@ -343,7 +345,7 @@ function readSettingsFromUI() {
   settings.sort    = elSort.value;
   settings.iconBarPos      = getPillValue('icon-bar-pos-btns', 'left');
   settings.hostHistoryCols = parseInt(getPillValue('host-history-cols-btns', '3'), 10) || 3;
-  settings.hideDepleted    = elHideDepleted.checked;
+  // hideDepleted はヘッダのトグルボタンが settings を直接更新するのでここでは読まない
   settings.showEventBanner = elShowEventBanner.checked;
   settings.hideJoined      = elHideJoined.checked;
   settings.keepDropLogOnRemove = elKeepDropLog.checked;
@@ -1868,18 +1870,45 @@ function saveHostHistory() {
 function checkDailyReset() {
   const today = getGBFDateString();
   if (hostHistoryDate !== today) {
+    // 前日の実自発回数（todayCount）は questMeta 側に無いので、ゼロクリア前に引く
+    const usedByQuest = new Map();
+    for (const r of hostHistory) usedByQuest.set(String(r.questId), r.todayCount || 0);
+
+    for (const qid in questMeta) {
+      const m = questMeta[qid];
+      // Hell クエストは日付変更で初期化されない（クリア時に確率で増えるのみ）。
+      // 回数の増減要因もキャンペーン／パスとは無関係なので学習・解除の対象外。
+      if (m.isHellQuest) continue;
+      const isPro = m.raidCategory === 'pro';
+
+      // ── MAX 学習 ──
+      // 上限解除して余分に自発できた日は、その実績が真の上限なので learnedMax に採用。
+      // 未消化だった日は実績が上限を示さないため learnedMax を捨てて baseMax へ戻す。
+      // これによりキャンペーン／パスが切れても翌日以降に自動収束し、手動解除が最小で済む。
+      const used    = usedByQuest.get(String(qid)) || 0;
+      const prevEff = effectiveMax(m, isPro);
+      if (used > 0 && Number.isFinite(prevEff) && used >= prevEff) m.learnedMax = used;
+      else delete m.learnedMax;
+
+      // 本日分の上限解除は日付をまたいだ時点で失効
+      delete m.overrideDate;
+
+      // 残り回数を実効 MAX（学習後）に戻す。
+      // 学習値は「そのクエストで実際に使われるカウンタ」にだけ乗せ、
+      // もう一方は従来どおり DOM 真値へ戻す。
+      const eff = effectiveMax(m, isPro);
+      if (isPro) {
+        if (eff != null)               m.proQuestSkip = eff;
+        if (m.maxLimitedCount != null) m.limitedCount = m.maxLimitedCount;
+      } else {
+        if (eff != null)               m.limitedCount = eff;
+        if (m.maxProQuestSkip != null) m.proQuestSkip = m.maxProQuestSkip;
+      }
+    }
+
     // パネル（クエスト一覧）は保持し、本日の回数だけリセット
     hostHistory.forEach(r => { r.todayCount = 0; });
     hostHistoryDate = today;
-    // 日付が変わったら残り回数をmaxに戻す
-    for (const qid in questMeta) {
-      const m = questMeta[qid];
-      // Hell クエストは日付変更で初期化されない（クリア時に確率で増えるのみ）
-      if (m.isHellQuest) continue;
-      if (m.maxLimitedCount != null) m.limitedCount = m.maxLimitedCount;
-      // PRO quest: max は questId ごとの固定値なので保持し、残り回数のみ max に戻す
-      if (m.maxProQuestSkip != null) m.proQuestSkip = m.maxProQuestSkip;
-    }
     // 日付変更時に敵画像キャッシュもクリア（ストレージ肥大化防止）
     chrome.storage.local.remove('gbfRfEnemyImgCache');
   }
@@ -1933,6 +1962,50 @@ function catLabel(cat) {
 // rec.raidCategory → questMeta → 'etc' の優先でカテゴリ解決
 function resolveCat(rec) {
   return rec.raidCategory || questMeta[rec.questId]?.raidCategory || 'etc';
+}
+
+// ── 実効 MAX / 本日上限解除 ────────────────────────────
+// キャンペーンやプレミアムパスによる自発回数の増減は DOM から取得できない
+// （マイクエスト経由で自発するとクエスト一覧ページを開かないため）。
+// そのため baseMax（DOM 真値）に対し、前日の実績から学習した learnedMax を
+// 上乗せした値を「実効 MAX」として表示・depleted 判定・日付リセットで共用する。
+function effectiveMax(meta, isPro) {
+  const base    = isPro ? meta?.maxProQuestSkip : meta?.maxLimitedCount;
+  const learned = meta?.learnedMax;
+  if (!Number.isFinite(learned)) return base;
+  return Number.isFinite(base) ? Math.max(learned, base) : learned;
+}
+
+// 本日分の上限判定が手動解除されているか（GBF 日付が変わると自動失効）
+function isOverridden(meta) {
+  return !!meta && meta.overrideDate === hostHistoryDate;
+}
+
+// 本日上限解除トグルの ON/OFF 表示。現在のカテゴリフィルタ対象に解除中エントリがあれば ON。
+function updateOverrideBtnState() {
+  if (!btnDepletedOverride) return;
+  const on = hostHistory.some(rec =>
+    passesCategoryFilter(rec) && isOverridden(questMeta[rec.questId])
+  );
+  btnDepletedOverride.classList.toggle('active', on);
+}
+
+// 1エントリが depleted（残り自発回数 0）かを判定。PRO は proQuestSkip、それ以外は limitedCount。
+// Hell は max 常に n1 と同値仕様 (0/0 を許容) のため、max>0 ガードを外し remaining===0 で判定する。
+// マイクエストの描画と本日上限解除トグルの両方から使うためモジュールスコープに置く。
+function isHostEntryDepleted(rec) {
+  const meta = questMeta[rec.questId] || null;
+  if (!meta) return false;
+  const isPro = resolveCat(rec) === 'pro';
+  if (meta.isHellQuest) {
+    return Number.isFinite(meta.limitedCount) && meta.limitedCount <= 0;
+  }
+  // 本日分の上限解除中は灰色にしない（キャンペーン／パスによる増加分を手動で解放）
+  if (isOverridden(meta)) return false;
+  const max       = effectiveMax(meta, isPro);
+  const remaining = isPro ? meta.proQuestSkip : meta.limitedCount;
+  const hasLimit  = typeof max === 'number' && max > 0;
+  return hasLimit && typeof remaining === 'number' && remaining <= 0;
 }
 
 // ── マイクエスト カテゴリフィルタ判定 ──────────────────
@@ -2038,24 +2111,10 @@ function renderHostHistory() {
   if (pruneExpiredEventBanners())     dirty = true;
   if (dirty) saveHostHistory();
   elHostDate.textContent = hostHistoryDate;
+  updateOverrideBtnState();
 
-  // resolveCat / CAT_ORDER / catLabel はモジュール先頭の共通ヘルパを使用（ダッシュボードと共用）
-
-  // 1エントリが depleted（残り自発回数 0）かを判定。PRO は proQuestSkip、それ以外は limitedCount。
-  // Hell は max 常に n1 と同値仕様 (0/0 を許容) のため、max>0 ガードを外し remaining===0 で判定する。
-  const isEntryDepleted = (rec) => {
-    const meta = questMeta[rec.questId] || null;
-    if (!meta) return false;
-    const cat  = resolveCat(rec);
-    const isPro = cat === 'pro';
-    if (meta.isHellQuest) {
-      return Number.isFinite(meta.limitedCount) && meta.limitedCount <= 0;
-    }
-    const max       = isPro ? meta.maxProQuestSkip : meta.maxLimitedCount;
-    const remaining = isPro ? meta.proQuestSkip    : meta.limitedCount;
-    const hasLimit  = typeof max === 'number' && max > 0;
-    return hasLimit && typeof remaining === 'number' && remaining <= 0;
-  };
+  // resolveCat / CAT_ORDER / catLabel / isHostEntryDepleted はモジュール先頭の共通ヘルパを使用
+  const isEntryDepleted = isHostEntryDepleted;
 
   // カテゴリごとに「登録あり & 全て depleted」＝クリア状態を判定。
   // 判定は現在のカテゴリフィルタに関係なく hostHistory 全件で行う。
@@ -2093,7 +2152,7 @@ function renderHostHistory() {
     const meta     = entry.meta;
     const name     = meta?.chapterName || `Quest ${entry.questId}`;
     const isPro    = entry.raidCategory === 'pro';
-    const max      = isPro ? meta?.maxProQuestSkip : meta?.maxLimitedCount;
+    const max      = meta?.isHellQuest ? meta?.maxLimitedCount : effectiveMax(meta, isPro);
     const remaining = isPro ? meta?.proQuestSkip    : meta?.limitedCount;
     const isDepleted = isEntryDepleted({ questId: entry.questId, raidCategory: entry.raidCategory });
     const tileClass  = isDepleted ? ' depleted' : '';
@@ -2124,9 +2183,13 @@ function renderHostHistory() {
 
     // Hell は max 常に n1 と同値仕様 (0/0 を許容) のため > 0 ガードを外す。
     // 非 hell は applyMaxLimitedCountFallback により max が undefined か >=1 のみ → 既存挙動と整合。
-    const limitInfo = (Number.isFinite(max) && Number.isFinite(remaining))
-      ? `<span class="host-count-badge${badgeClass}">${esc(t('hostRemainingPre'))}<span class="hc-current">${remaining}</span><span class="hc-sep">/</span><span class="hc-max">${max}</span>${esc(t('hostRemainingPost'))}</span>`
-      : `<span class="host-count-badge"><span class="hc-current">${entry.todayCount}</span>${esc(t('hostTodayCountSuffix'))}</span>`;
+    // 上限解除中は残り回数が実態とズレているため「残り n/m」を出さず、
+    // 本日の実自発回数（＝翌日の MAX 学習に使われる値）だけを見せる。
+    const limitInfo = isOverridden(meta)
+      ? `<span class="host-count-badge override"><span class="hc-badge-mark">${esc(t('hostOverrideBadge'))}</span><span class="hc-current">${entry.todayCount}</span>${esc(t('hostTodayCountSuffix'))}</span>`
+      : (Number.isFinite(max) && Number.isFinite(remaining))
+        ? `<span class="host-count-badge${badgeClass}">${esc(t('hostRemainingPre'))}<span class="hc-current">${remaining}</span><span class="hc-sep">/</span><span class="hc-max">${max}</span>${esc(t('hostRemainingPost'))}</span>`
+        : `<span class="host-count-badge"><span class="hc-current">${entry.todayCount}</span>${esc(t('hostTodayCountSuffix'))}</span>`;
 
     // hell skip プルダウン: hellSkipParams が観測されており、残り回数 > 0 の hell タイルに表示。
     // 上限は min(残り回数, 10)。初期選択値は常に最大（=末尾の option）。
@@ -2762,10 +2825,36 @@ if (elHostCategoryBar) {
   });
 });
 
-elHideDepleted.addEventListener('change', () => {
-  readSettingsFromUI();
+// 完了クエスト非表示トグル（マイクエストヘッダ）
+btnHideDepleted.addEventListener('click', () => {
+  settings.hideDepleted = !settings.hideDepleted;
+  btnHideDepleted.classList.toggle('active', settings.hideDepleted);
   saveAll();
   if (activeTab === 'host-history') renderHostHistory();
+});
+
+// 本日上限解除トグル（マイクエストヘッダ）
+// 対象は現在のカテゴリフィルタを通る非 hell エントリ。
+// 対象内に灰色が 1 件でもあれば解除を付与し、無ければ対象内の解除をすべて取り消す。
+btnDepletedOverride.addEventListener('click', () => {
+  checkDailyReset();
+  const targets = hostHistory.filter(rec =>
+    passesCategoryFilter(rec) && !questMeta[rec.questId]?.isHellQuest
+  );
+  const depleted = targets.filter(rec => isHostEntryDepleted(rec));
+  if (depleted.length > 0) {
+    for (const rec of depleted) {
+      if (!questMeta[rec.questId]) questMeta[rec.questId] = {};
+      questMeta[rec.questId].overrideDate = hostHistoryDate;
+    }
+  } else {
+    for (const rec of targets) {
+      const m = questMeta[rec.questId];
+      if (m) delete m.overrideDate;
+    }
+  }
+  saveHostHistory();
+  renderHostHistory();
 });
 
 elShowEventBanner.addEventListener('change', () => {
