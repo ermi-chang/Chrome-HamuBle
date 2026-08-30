@@ -1587,8 +1587,27 @@
       // 確定OKはゲームが即座にページ遷移するが、戻るボタンは人間操作で遅延がある
       fireSelfHostDetected();
     } else if (pendingHost?.source === 'click') {
-      // クリック由来のデータは上書き・クリアしない（TTL切れのみクリア）
-      if (Date.now() - pendingHost.ts > PENDING_HOST_TTL) pendingHost = null;
+      if (hostMatch && String(pendingHost.questId) !== String(hostMatch[1])) {
+        // 別クエストのサポート石選択画面へ遷移した = 元のクリックは中断された。
+        // (例: GBF でクエストAを選び OK 前に、サイドパネルのマイクエストからクエストBへ直遷移)
+        // 保持し続けると B の OK 押下が A の pendingHost を確定させ、
+        // 実行していない A が登録され B の回数が減らない。
+        // supporter URL の questId を真値として hash 由来へ差し替える。
+        pendingHost = {
+          source:     'hash',
+          ts:         Date.now(),
+          questId:    hostMatch[1],
+          questType:  hostMatch[2],
+          treasureId: hostMatch[3] || '',
+        };
+      } else if (pendingHost.okClickedAt && !hostMatch) {
+        // OK 済みだが上の確定分岐（1秒以内）に入らなかった = 遷移が遅延した等で窓を逃した。
+        // 残すと click 検知側の「OK済み上書き保護」が次のクエストクリックを取りこぼすため破棄。
+        pendingHost = null;
+      } else if (Date.now() - pendingHost.ts > PENDING_HOST_TTL) {
+        // クリック由来のデータは上書き・クリアしない（TTL切れのみクリア）
+        pendingHost = null;
+      }
     } else if (hostMatch) {
       pendingHost = {
         source:     'hash',
@@ -1657,6 +1676,22 @@
   if (isEventOrTeaserHash(location.hash)) {
     setTimeout(tryReportEventInfo, 600);
     setTimeout(tryReportEventInfo, 1800);
+  }
+
+  // 起動時に既にサポート石選択画面上であれば hash 由来の保留を作る（hashchange を踏まないケース）。
+  // ページロードを伴う遷移やリロードで着地した場合、保留が無いままだと OK を押しても確定しない。
+  // hostHistory に無い questId はサイドパネル側で無視されるため誤登録は起きない。
+  {
+    const bootHostMatch = (location.hash || '').match(SELF_HOST_RE);
+    if (bootHostMatch) {
+      pendingHost = {
+        source:     'hash',
+        ts:         Date.now(),
+        questId:    bootHostMatch[1],
+        questType:  bootHostMatch[2],
+        treasureId: bootHostMatch[3] || '',
+      };
+    }
   }
 
   // 起動時にウォッチリストを 1 回ロード、リザルトページ上ならスキャンも開始
