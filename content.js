@@ -8,8 +8,37 @@
   console.log('[hamuble] content.js loaded', location.href);
 
   // ── Extension context validity ────────────────────
+  // 拡張機能をリロード/更新すると、開いたままのページに残った content script は
+  // 孤立する（= context invalidated）。この状態で chrome.runtime.sendMessage() を
+  // 呼ぶと「同期的に」Error を throw するため、Promise の .catch() では捕捉できない。
+  // 送信は必ず safeSendMessage() 経由で行うこと。
+  let contextDead = false;
+
   function isContextValid() {
+    if (contextDead) return false;
     try { return !!chrome.runtime?.id; } catch (_) { return false; }
+  }
+
+  // 失効を検知したら以後の動作を止める（タイマー/オブザーバーが生き残ると
+  // 同じエラーを延々と吐き続けるため）。
+  function shutdownOnContextInvalid() {
+    if (contextDead) return;
+    contextDead = true;
+    console.warn('[hamuble] extension context invalidated - content script stopped');
+    try { disconnectObservers(); } catch (_) { /* ignore */ }
+    try { clearTimeout(notifyTimer); } catch (_) { /* ignore */ }
+    try { if (attachRetry) { clearInterval(attachRetry); attachRetry = null; } } catch (_) { /* ignore */ }
+  }
+
+  function safeSendMessage(message) {
+    if (!isContextValid()) { shutdownOnContextInvalid(); return; }
+    try {
+      const p = chrome.runtime.sendMessage(message);
+      // 受信側（sidepanel/background）不在時の rejection は無視して良い
+      if (p && typeof p.catch === 'function') p.catch(() => { /* ignore */ });
+    } catch (_) {
+      shutdownOnContextInvalid();
+    }
   }
 
   // ── 自発URL検出用正規表現 ──────────────────────────
@@ -35,10 +64,15 @@
   let dropWatchLoaded = false;
 
   function loadDropWatch() {
-    chrome.storage.local.get(['gbfRfDropWatch'], (data) => {
-      cachedDropWatch = Array.isArray(data.gbfRfDropWatch) ? data.gbfRfDropWatch : [];
-      dropWatchLoaded = true;
-    });
+    if (!isContextValid()) { shutdownOnContextInvalid(); return; }
+    try {
+      chrome.storage.local.get(['gbfRfDropWatch'], (data) => {
+        cachedDropWatch = Array.isArray(data.gbfRfDropWatch) ? data.gbfRfDropWatch : [];
+        dropWatchLoaded = true;
+      });
+    } catch (_) {
+      shutdownOnContextInvalid();
+    }
   }
   // ストレージ側で編集された時は即座に反映する
   try {
@@ -153,22 +187,22 @@
     console.log('[hamuble:drop] scan', { resultKey: key, drops: drops.length, hits: hits.length, fallback });
 
     // RECENT_DROPS_DETECTED: 全ドロップ（フッター用）
-    chrome.runtime.sendMessage({
+    safeSendMessage({
       type:       'RECENT_DROPS_DETECTED',
       resultKey:  key,
       drops,
       detectedAt: Date.now(),
-    }).catch(() => {});
+    });
 
     // DROP_LOGGED: ウォッチ一致のみ
     if (hits.length > 0) {
-      chrome.runtime.sendMessage({
+      safeSendMessage({
         type:       'DROP_LOGGED',
         resultKey:  key,
         hash,
         hits,
         detectedAt: Date.now(),
-      }).catch(() => {});
+      });
     }
     return true;
   }
@@ -294,7 +328,7 @@
     console.log('[hamuble:hell] fireHellQuestConsumed', { questId: pendingHellHost.questId, skipOn: pendingHellHost.skipOn, skipNum: pendingHellHost.skipNum });
     const { before, skipNum } = pendingHellHost;
     const after = Number.isFinite(before) ? Math.max(0, before - skipNum) : null;
-    chrome.runtime.sendMessage({
+    safeSendMessage({
       type:              'HELL_QUEST_CONSUMED',
       questId:           pendingHellHost.questId,
       chapterName:       pendingHellHost.chapterName,
@@ -307,7 +341,7 @@
       // skip URL から採取した quest_id/quest_type/back_link を sidepanel 側に保存させる。
       // 取得できているのは「skip ON で確定した hell」のみ。skip OFF や未観測の hell では null。
       hellSkipParams:    pendingHellHost.hellSkipParams || null,
-    }).catch(() => {});
+    });
     // 重複発火防止のため pendingHellHost は確実にクリアする。
     // Retry 経路 (リザルト→もう一度挑戦) は str_params URL を新たに踏むので、
     // hashchange ハンドラで lastFiredHell から pendingHellHost を再構築する。
@@ -334,7 +368,7 @@
 
   function fireSelfHostDetected() {
     if (!pendingHost) return;
-    chrome.runtime.sendMessage({
+    safeSendMessage({
       type: 'SELF_HOST_DETECTED',
       source:     pendingHost.source,
       questId:    pendingHost.questId,
@@ -350,7 +384,7 @@
       eventPeriodEndMs: pendingHost.eventPeriodEndMs ?? null,
       eventName:    pendingHost.eventName || '',
       hostThumbnailSrc: pendingHost.hostThumbnailSrc || '',
-    }).catch(() => {});
+    });
     pendingHost = null;
   }
 
@@ -411,18 +445,23 @@
 
   // 未知クラスをstorage.localに蓄積
   function logUnknownClasses(classes, dataset) {
-    chrome.storage.local.get('gbfRfUnknownClasses', (data) => {
-      const log = data.gbfRfUnknownClasses || [];
-      log.push({
-        time:       new Date().toISOString(),
-        classes,
-        questId:    dataset.questId    || '',
-        raidType:   dataset.raidType   || '',
-        chapterName: dataset.chapterName || '',
+    if (!isContextValid()) { shutdownOnContextInvalid(); return; }
+    try {
+      chrome.storage.local.get('gbfRfUnknownClasses', (data) => {
+        const log = data.gbfRfUnknownClasses || [];
+        log.push({
+          time:       new Date().toISOString(),
+          classes,
+          questId:    dataset.questId    || '',
+          raidType:   dataset.raidType   || '',
+          chapterName: dataset.chapterName || '',
+        });
+        if (log.length > 200) log.splice(0, log.length - 200);
+        chrome.storage.local.set({ gbfRfUnknownClasses: log });
       });
-      if (log.length > 200) log.splice(0, log.length - 200);
-      chrome.storage.local.set({ gbfRfUnknownClasses: log });
-    });
+    } catch (_) {
+      shutdownOnContextInvalid();
+    }
   }
 
   // { param: number|null, isUnknown: boolean, unknownClasses: string[] }
@@ -621,7 +660,7 @@
     if (!info.isTeaser && !info.isEnding && !info.isEventEnd && info.eventName) {
       cachedEventName = info.eventName;
     }
-    chrome.runtime.sendMessage({
+    safeSendMessage({
       type:           'EVENT_INFO_DETECTED',
       eventName:      info.eventName,
       title:          info.title,
@@ -634,7 +673,7 @@
       isRewardClaim:  !!info.isRewardClaim,
       eventStartMs:   Number.isFinite(info.eventStartMs) ? info.eventStartMs : null,
       eventEndMs:     Number.isFinite(info.eventEndMs)   ? info.eventEndMs   : null,
-    }).catch(() => {});
+    });
   }
 
   // ── mypage 本体バナー読取り（読取り専用）──────────
@@ -655,19 +694,19 @@
       const imgUrl = btn.querySelector('.img-global-banner')?.src || '';
       if (!imgUrl) return;
       paths.push(path);
-      chrome.runtime.sendMessage({
+      safeSendMessage({
         type:     'EVENT_BANNER_DETECTED',
         path,
         imgUrl,
         isTeaser: /^teaser\//.test(path),
-      }).catch(() => {});
+      });
     });
     // mypage スイープ完了通知。sidepanel 側で paths に含まれない Teaser を即削除する。
-    chrome.runtime.sendMessage({
+    safeSendMessage({
       type:  'MYPAGE_BANNERS_SWEEP',
       paths,
       at:    Date.now(),
-    }).catch(() => {});
+    });
   }
 
   // ── 難易度カテゴリ判定（自発クリック時のページ文脈から） ─
@@ -889,10 +928,10 @@
     if (!isContextValid()) return;
     const meta = extractEventTabHellMeta();
     if (!meta) return;
-    chrome.runtime.sendMessage({
+    safeSendMessage({
       type: 'QUEST_META_UPDATED',
       questMeta: meta,
-    }).catch(() => {});
+    });
   }
 
   // ── MutationObserver ──────────────────────────────
@@ -900,7 +939,7 @@
   function notifyUpdate() {
     clearTimeout(notifyTimer);
     notifyTimer = setTimeout(() => {
-      chrome.runtime.sendMessage({ type: 'RAID_LIST_UPDATED' }).catch(() => {});
+      safeSendMessage({ type: 'RAID_LIST_UPDATED' });
     }, 150);
   }
   const OBSERVE_TARGETS = ['#prt-multi-list', '#prt-search-list'];
@@ -942,6 +981,8 @@
   // 片方のタブしか表示されない状況でも無限ループしない。
   let attachRetry = null;
   function ensureObservers() {
+    // context 失効後は再接続しない（hashchange 経由の再入で observer / interval が復活するのを防ぐ）
+    if (contextDead) return;
     const existingCount = OBSERVE_TARGETS.filter(sel => !!document.querySelector(sel)).length;
     if (existingCount > 0 && raidObservers.length >= existingCount) return;
     startObservers();
@@ -1003,7 +1044,7 @@
     const tabBtn = e.target.closest('#tab-multi, #tab-search');
     if (!tabBtn) return;
     setTimeout(() => {
-      chrome.runtime.sendMessage({ type: 'RAID_TAB_SWITCHED' }).catch(() => {});
+      safeSendMessage({ type: 'RAID_TAB_SWITCHED' });
     }, 250);
   }, true);
 
@@ -1027,10 +1068,10 @@
       if (!isContextValid()) return;
       const meta = extractQuestMeta();
       if (meta) {
-        chrome.runtime.sendMessage({
+        safeSendMessage({
           type: 'QUEST_META_UPDATED',
           questMeta: meta,
-        }).catch(() => {});
+        });
       }
     };
     setTimeout(tryExtract, 500);
@@ -1280,10 +1321,10 @@
       if (!isContextValid()) return;
       const meta = extractQuestMeta();
       if (meta) {
-        chrome.runtime.sendMessage({
+        safeSendMessage({
           type: 'QUEST_META_UPDATED',
           questMeta: meta,
-        }).catch(() => {});
+        });
       }
     };
     setTimeout(tryExtract, 500);
@@ -1627,10 +1668,10 @@
         if (!isContextValid()) return;
         const meta = extractQuestMeta();
         if (meta) {
-          chrome.runtime.sendMessage({
+          safeSendMessage({
             type: 'QUEST_META_UPDATED',
             questMeta: meta,
-          }).catch(() => {});
+          });
         }
         // extra event タブの Hell リストも併せて抽出
         if (hash.indexOf('#quest/extra') === 0) {
