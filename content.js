@@ -406,6 +406,7 @@
   // 装飾系クラス（raidTypeとは無関係）
   const DECORATION_CLASSES = new Set([
     'btn-multi-raid', 'lis-raid', 'show-assist-comment',
+    'beginner', // ビギナー救援の強調表示（リスト種別ではない）
   ]);
 
   // 未知クラスをstorage.localに蓄積
