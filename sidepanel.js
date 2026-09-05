@@ -1621,12 +1621,6 @@ function pruneExpiredActiveEvents() {
   return changed;
 }
 
-/** カテゴリフィルタが ALL もしくは event を含むときだけ、(イベント) バナーを表示する */
-function shouldShowEventBanner() {
-  const cats = getHostCategoryFilters();
-  return cats.includes('all') || cats.includes('event');
-}
-
 /** イベントカテゴリのマイクエスト履歴を、イベント終了に同期して履歴から除去する。
  *  優先順:
  *   1. eventPeriodEndMs が有限 → now がそれを過ぎていれば削除。
@@ -2050,11 +2044,10 @@ function updateCategoryChipBadges(categoryClearState) {
 
 // ── 開催中／予告イベント バナー HTML 生成 ──────────────
 // mypage グローバルバナー由来の eventBanners を画像で描画する。
-// 「ALL もしくは event カテゴリ選択中」のときだけ非空 HTML を返す。
+// 表示可否は設定のイベントバナー表示トグルのみで決まる（マイクエストのカテゴリ選択には連動しない）。
 // 群分け: isTeaser→開催前 / isEventEnd または eventEndMs<=now→開催終了（グレーアウト）/ それ以外→開催中。
 function buildActiveEventsBannerHTML() {
   if (!settings.showEventBanner) return '';
-  if (!shouldShowEventBanner()) return '';
   const now = Date.now();
 
   const teasers = [];
