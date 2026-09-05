@@ -7,11 +7,17 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --bg0: #1a1e24; --bg1: #20262d; --bg2: #282e35; --bg3: #2e363f;
-      --bdr: #3a4149; --bdr2: #485058;
-      --tx0: #e0ddd5; --tx1: #aaa9a2; --tx2: #7a8593;
+      --bg0: #171b21; --bg1: #1e242b; --bg2: #252c34; --bg3: #2d353e;
+      /* 対話フィードバックは面のトークンと同色相に保つ（旧 #302F40 は紫方向へ外れていた） */
+      --hov: #2b333c; --act: #343d47;
+      --bdr: #333b44; --bdr2: #454f5a;
+      --tx0: #e7eaee; --tx1: #a4aeb9; --tx2: #727d89;
       --acc: #57cfdc; --acc-d: #3fa8b5;
+      /* --red は破壊的操作専用。警告は --org、無効表現は面と点線で行う */
       --grn: #3eb503; --org: #ffa826; --red: #ff4d00;
+      --red-tx: #ff8f6a;
+      --hp-g: #3eb503; --hp-o: #ffa826; --hp-r: #ff6a33;
+      --bp-dot: #4fa3e0;
       --cat-free:  #a3d900;
       --cat-nm:    #8b1a2b;
       --cat-hl:    #5e4b9e;
@@ -27,9 +33,18 @@
     body {
       display: flex; flex-direction: row;
       background: var(--bg0); color: var(--tx0);
-      font-family: "Helvetica Neue", Arial, "Hiragino Kaku Gothic ProN", sans-serif;
+      /* 配信先（Windows / macOS）と出荷言語（簡体中文）から選定。旧指定は Windows に 1 書体も存在しなかった */
+      font-family: system-ui, "Segoe UI", "Noto Sans SC", "PingFang SC", "Microsoft YaHei",
+                   "Hiragino Kaku Gothic ProN", sans-serif;
       font-size: 13px;
+      -webkit-font-smoothing: antialiased;
     }
+    /* 更新され続ける数値は等幅数字にして桁の揺れを止める */
+    .tabnum { font-variant-numeric: tabular-nums; }
+
+    /* ── Focus ── キーボード操作の可視化（全要素共通） */
+    :focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
+    input:focus-visible, select:focus-visible, .filter-check:focus-visible { outline-offset: 1px; }
 
     /* ── Icon bar ── */
     .icon-bar {
@@ -46,7 +61,7 @@
       display: flex; align-items: center; justify-content: center;
       border-radius: var(--r-sm); border: 1px solid transparent;
       cursor: pointer; background: none; padding: 0;
-      color: var(--tx2); transition: all .15s;
+      color: var(--tx2); transition: background .15s ease-out, color .15s ease-out, border-color .15s ease-out;
     }
     .icon-btn:hover { background: var(--bg3); color: var(--tx1); }
     .icon-btn.active { background: rgba(87,207,220,0.12); border-color: var(--acc); color: var(--acc); }
@@ -78,7 +93,7 @@
       display: flex; align-items: center; justify-content: center;
       border-radius: 4px; border: 1px solid var(--bdr2);
       cursor: pointer; background: none; padding: 0;
-      color: var(--tx2); transition: all .15s;
+      color: var(--tx2); transition: background .15s ease-out, color .15s ease-out, border-color .15s ease-out;
       margin-top: auto; flex-shrink: 0;
     }
     .home-btn:hover { background: var(--bg2); color: var(--tx1); }
@@ -110,7 +125,7 @@
       left: -4px; right: auto;
       width: 12px; height: 12px; border-radius: 50%;
       background: #c0392b; color: #fff;
-      font-size: 9px; line-height: 12px; text-align: center;
+      font-size: 10px; line-height: 12px; text-align: center;
       border: none; cursor: pointer; padding: 0;
       display: none; z-index: 22;
     }
@@ -281,7 +296,7 @@
     .dash-drop-cell.sun   { background: rgba(190, 110, 110, 0.15); }
     .dash-drop-cell.off   { opacity: 0.45; }
     .dash-drop-cell.today { outline: 1px solid var(--acc); }
-    .dash-drop-cell-date  { color: var(--tx2); font-size: 9px; line-height: 1; }
+    .dash-drop-cell-date  { color: var(--tx2); font-size: 10px; line-height: 1; }
     .dash-drop-cell-items { display: flex; flex-wrap: wrap; gap: 1px 2px; margin-top: 1px; }
     .dash-drop-cell-item  { display: inline-flex; align-items: center; gap: 1px; }
     .dash-drop-cell-item img {
@@ -289,7 +304,7 @@
       object-fit: cover; background: var(--bg1);
     }
     .dash-drop-cell-item-count {
-      font-size: 9px; color: var(--acc); font-weight: 700; line-height: 1;
+      font-size: 10px; color: var(--acc); font-weight: 700; line-height: 1;
     }
     .dash-drop-empty { font-size: 11px; color: var(--tx2); }
 
@@ -313,7 +328,7 @@
       display: flex; align-items: center; justify-content: center;
       overflow: hidden;
     }
-    .drop-chip:hover { border-color: var(--red, #e05); }
+    .drop-chip:hover { border-color: var(--red); }
     .drop-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
     .drop-watch-input {
       display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
@@ -334,7 +349,7 @@
     .drop-watch-input button:hover { background: var(--bg1); color: var(--tx0); }
     .drop-watch-input-error {
       flex-basis: 100%;
-      font-size: 10px; color: var(--red, #e05);
+      font-size: 10px; color: var(--red);
     }
     .drop-watch-input-error:empty { display: none; }
 
@@ -391,7 +406,7 @@
       top: -5px; right: -5px;
       width: 14px; height: 14px;
       background: var(--grn, #6c6); color: var(--bg0);
-      font-size: 9px; font-weight: 700;
+      font-size: 10px; font-weight: 700;
       border-radius: 50%;
       display: flex; align-items: center; justify-content: center;
       line-height: 1;
@@ -403,24 +418,43 @@
     .recent-drops-chips:empty + .recent-drops-empty { display: inline; }
     .recent-drops-chips:not(:empty) + .recent-drops-empty { display: none; }
 
-    /* ── Header ── */
-    .header { background: var(--bg2); padding: 8px 10px; border-bottom: 1px solid var(--bdr); flex-shrink: 0; }
-    .header-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; }
-    h1 { font-size: 13px; font-weight: 600; color: var(--acc); }
-
-    /* ── Quick actions bar ── */
-    .quick-bar { padding: 8px 10px; background: var(--bg1); border-bottom: 1px solid var(--bdr); flex-shrink: 0; }
-    .quick-bar-top { display: flex; gap: 6px; }
+    /* ── Rescue control zone ──
+       旧: 見出し / クイック / フィルタ / テンプレ / FP / ソート の 6 本の帯。
+       新: クイック + テンプレ列 + 条件ボタン の 1 ゾーンに集約し、
+           HP / 人数 / FP は #cond-panel へ格納する（既定は閉）。
+           ソートは results-bar 右端へ吸収。カード 1 枚目の到達位置を上げるのが目的。 */
+    .ctl { padding: 8px 10px 7px; background: var(--bg1); flex-shrink: 0; }
+    .ctl-quick { display: flex; gap: 6px; margin-bottom: 7px; }
+    .ctl-row { display: flex; align-items: flex-start; gap: 6px; }
 
     .btn-assist {
       flex: 1;
-      display: flex; align-items: center; justify-content: center; gap: 5px;
+      display: flex; align-items: center; justify-content: center; gap: 6px;
       background: rgba(87,207,220,0.12); border: 1px solid var(--acc-d);
-      color: var(--acc); border-radius: 6px;
-      padding: 10px 6px; font-size: 14px; font-weight: 600;
-      cursor: pointer; transition: background .12s;
+      color: var(--acc); border-radius: var(--r-sm);
+      padding: 8px 6px; font-size: 13px; font-weight: 600;
+      cursor: pointer; transition: background .12s ease-out;
+      font-family: inherit;
     }
     .btn-assist:hover { background: rgba(87,207,220,0.22); }
+    .btn-assist:active { transform: scale(.985); }
+    .btn-assist svg { width: 14px; height: 14px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+    /* 条件ボタン: 現在の絞り込み条件をラベルに要約表示し、押すと #cond-panel を開閉 */
+    .cond-btn {
+      flex-shrink: 0; margin-left: auto;
+      display: inline-flex; align-items: center; gap: 5px;
+      min-height: 24px; padding: 3px 8px;
+      background: none; border: 1px solid var(--bdr); border-radius: var(--r-sm);
+      color: var(--tx1); font-size: 11px; font-family: inherit; cursor: pointer;
+      transition: color .12s ease-out, border-color .12s ease-out, background .12s ease-out;
+    }
+    .cond-btn:hover { color: var(--tx0); border-color: var(--bdr2); }
+    .cond-btn[aria-expanded="true"] { background: rgba(87,207,220,0.12); border-color: var(--acc); color: var(--acc); }
+    .cond-btn.has-cond { border-color: var(--acc-d); color: var(--acc); }
+    .cond-summary { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .cond-caret { width: 11px; height: 11px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: transform .15s ease-out; }
+    .cond-btn[aria-expanded="true"] .cond-caret { transform: rotate(180deg); }
 
     /* ── BP display (results-bar 件数横) ── */
     .bp-display {
@@ -432,12 +466,13 @@
     .bp-display.shortage .bp-display-value { color: var(--red); }
 
     /* ── BP shortage warning banner ── */
+    /* 警告であって破壊的操作ではないので --org（--red は削除系専用） */
     .bp-shortage-banner {
       display: flex; align-items: center; gap: 6px;
       padding: 8px 10px;
-      background: rgba(255,77,0,0.14);
-      border-bottom: 1px solid var(--red);
-      color: var(--red);
+      background: rgba(255,168,38,0.13);
+      border-bottom: 1px solid var(--org);
+      color: var(--org);
       font-size: 12px; font-weight: 600;
       flex-shrink: 0;
     }
@@ -492,8 +527,16 @@
     .pill:hover { border-color: var(--acc); color: var(--acc); }
     .pill.active { background: rgba(87,207,220,0.15); border-color: var(--acc); color: var(--acc); font-weight: 700; }
 
-    /* ── Filters ── */
-    .filters { padding: 8px 10px; background: var(--bg1); border-bottom: 1px solid var(--bdr); flex-shrink: 0; }
+    /* ── Condition panel（HP / 人数 / FP）──
+       開くとリストを下へ押し出す（重ねない）。一覧最上段のカードは
+       最も価値の高いクリック対象なので、開いている間も覆ってはならない。
+       開閉状態は settings.condOpen に保存する。 */
+    .ctl-wrap { flex-shrink: 0; }
+    .cond-panel {
+      padding: 8px 10px 9px;
+      background: var(--bg1); border-bottom: 2px solid var(--acc);
+    }
+    .cond-panel[hidden] { display: none; }
     .filter-grid { display: flex; flex-direction: column; gap: 7px; }
     .filter-block {
       background: var(--bg2); border: 1px solid var(--bdr); border-radius: var(--r);
@@ -516,55 +559,46 @@
     .filter-mode-toggle .mode-btn:hover:not([aria-pressed="true"]) { color: var(--acc); }
     .filter-mode-toggle .mode-btn[aria-pressed="true"] { background: var(--acc); color: var(--bg0); font-weight: 700; }
     .filter-mode-toggle .mode-btn + .mode-btn { border-left: 1px solid var(--bdr2); }
-    select:focus, input[type="number"]:focus { outline: none; border-color: var(--acc); }
+    select:focus-visible, input[type="number"]:focus-visible { border-color: var(--acc); }
     .filter-block.disabled > :not(.filter-check):not(.filter-block-title) { opacity: 0.4; pointer-events: none; }
 
-    /* ── Template bar ── */
-    .template-bar {
-      display: flex; align-items: flex-start; gap: 0;
-      padding: 5px 10px 5px 0;
-      background: var(--bg1);
-      border-bottom: 1px solid var(--bdr);
-      flex-shrink: 0;
-    }
+    /* ── Template chips（.ctl-row 内・1 タップで条件切替する最速動線なので常時表示） ── */
     .template-scroll {
       display: flex; align-items: center; gap: 5px;
-      flex: 1;
-      padding: 0 5px 0 10px;
+      flex: 1; min-width: 0;
       flex-wrap: wrap;      /* ← 折り返し */
     }
-    .tpl-chip { display: flex; align-items: center; gap: 0; background: var(--bg2); border: 1px solid var(--bdr2); border-radius: var(--r-pill); flex-shrink: 0; overflow: hidden; cursor: pointer; transition: border-color .12s; }
-    .tpl-chip:hover { border-color: var(--acc); }
+    .tpl-chip { display: flex; align-items: center; background: var(--bg2); border: 1px solid var(--bdr); border-radius: var(--r-pill); flex-shrink: 0; overflow: hidden; transition: border-color .12s ease-out; }
+    .tpl-chip:hover { border-color: var(--bdr2); }
     .tpl-chip.active-tpl { border-color: var(--acc); background: rgba(87,207,220,0.1); }
-    .tpl-chip-name { padding: 3px 8px 3px 9px; font-size: 11px; color: var(--tx0); white-space: nowrap; }
+    .tpl-chip-name { padding: 4px 7px 4px 10px; font-size: 11px; color: var(--tx0); white-space: nowrap; background: none; border: none; font-family: inherit; cursor: pointer; }
     .tpl-chip.active-tpl .tpl-chip-name { color: var(--acc); font-weight: 600; }
-    .tpl-chip-del { padding: 3px 6px 3px 2px; font-size: 10px; color: var(--tx2); cursor: pointer; line-height: 1; }
+    .tpl-chip-del { padding: 4px 8px 4px 3px; font-size: 10px; color: var(--tx2); cursor: pointer; line-height: 1; background: none; border: none; font-family: inherit; }
     .tpl-chip-del:hover { color: var(--red); }
-    .btn-tpl-add { background: none; border: 1px dashed var(--bdr2); color: var(--tx2); border-radius: var(--r-pill); padding: 3px 10px; font-size: 11px; cursor: pointer; white-space: nowrap; flex-shrink: 0; transition: border-color .12s, color .12s; align-self: flex-start; margin: 1px 0 0; }
+    .btn-tpl-add { background: none; border: 1px dashed var(--bdr2); color: var(--tx2); border-radius: var(--r-pill); min-height: 24px; padding: 3px 10px; font-size: 11px; cursor: pointer; white-space: nowrap; flex-shrink: 0; font-family: inherit; transition: border-color .12s ease-out, color .12s ease-out; }
     .btn-tpl-add:hover { border-color: var(--acc); color: var(--acc); }
 
-    /* ── BP row bar (FP 対象限定) ── */
-    .bp-row-bar { display: flex; align-items: center; gap: 6px; padding: 5px 10px; background: var(--bg1); border-bottom: 1px solid var(--bdr); flex-shrink: 0; transition: background .15s; }
-    .bp-row-bar.active-filter { background: rgba(87,207,220,0.06); }
-    .bp-row-bar .filter-block-title { color: var(--tx2); transition: color .15s; }
-    .bp-row-bar.active-filter .filter-block-title { color: var(--acc); }
-
-    /* ── Sort row ── */
-    .sort-row { display: flex; align-items: center; gap: 8px; padding: 5px 10px; background: var(--bg1); border-bottom: 1px solid var(--bdr); flex-shrink: 0; }
-    .sort-row label { font-size: 11px; color: var(--tx2); flex-shrink: 0; }
-    .sort-row select { flex: 1; background: var(--bg2); border: 1px solid var(--bdr2); color: var(--tx0); border-radius: var(--r-sm); padding: 4px 6px; font-size: 12px; cursor: pointer; }
-
-    /* ── Results bar ── */
-    .results-bar { display: flex; align-items: center; justify-content: space-between; padding: 4px 10px; background: var(--bg2); border-bottom: 1px solid var(--bdr); flex-shrink: 0; }
-    .count { font-size: 11px; color: var(--tx2); }
-    .count span { color: var(--acc); font-weight: 600; }
-    .updated { font-size: 10px; color: var(--tx2); }
+    /* ── Results bar（件数 / BP / 更新時刻 / ソート） ── */
+    .results-bar { display: flex; align-items: center; gap: 7px; padding: 5px 10px 4px; background: var(--bg0); flex-shrink: 0; }
+    .count { font-size: 11px; color: var(--tx2); font-variant-numeric: tabular-nums; }
+    .count span { color: var(--tx0); font-weight: 700; font-size: 13px; }
+    .rb-dot { width: 3px; height: 3px; border-radius: 50%; background: var(--bdr2); flex-shrink: 0; }
+    .updated { font-size: 10px; color: var(--tx2); font-variant-numeric: tabular-nums; }
+    .sort-mini {
+      margin-left: auto; flex-shrink: 0;
+      background: none; border: 1px solid transparent; border-radius: var(--r-sm);
+      color: var(--tx2); font-size: 11px; font-family: inherit;
+      padding: 2px 2px 2px 5px; cursor: pointer;
+      transition: color .12s ease-out, border-color .12s ease-out;
+    }
+    .sort-mini:hover { color: var(--tx0); border-color: var(--bdr); }
+    .sort-mini option { background: var(--bg2); color: var(--tx0); }
 
     /* ── Host history header ── */
     .host-header {
       display: flex; align-items: center; justify-content: space-between;
       padding: 6px 10px;
-      background: var(--bg2); border-bottom: 1px solid var(--bdr);
+      background: var(--bg2);
       flex-shrink: 0;
     }
     .host-header-title { font-size: 12px; font-weight: 600; color: var(--acc); }
@@ -573,7 +607,7 @@
     .host-tool-bar {
       display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
       padding: 5px 10px;
-      background: var(--bg2); border-bottom: 1px solid var(--bdr);
+      background: var(--bg2);
       flex-shrink: 0;
     }
     .host-tool-btn {
@@ -593,20 +627,11 @@
       background: var(--cat-event); border-color: var(--cat-event);
     }
 
-    /* ── Rescue tab header ── */
-    .rescue-header {
-      display: flex; align-items: center;
-      padding: 6px 10px;
-      background: var(--bg2); border-bottom: 1px solid var(--bdr);
-      flex-shrink: 0;
-    }
-    .rescue-header-title { font-size: 12px; font-weight: 600; color: var(--acc); }
-
     /* ── Host category filter bar ── */
     .host-category-bar {
       display: flex; flex-wrap: wrap; gap: 4px;
       padding: 5px 8px;
-      background: var(--bg1); border-bottom: 1px solid var(--bdr);
+      background: var(--bg1);
       flex-shrink: 0;
     }
     .cat-chip {
@@ -656,35 +681,49 @@
     .cat-chip[data-cat="ul"].active { color: #fff; }
 
     /* ── List ── */
-    .list { overflow-y: auto; flex: 1; padding: 4px 6px; }
+    .list { overflow-y: auto; flex: 1; padding: 2px 8px 8px; }
     .list::-webkit-scrollbar { width: 4px; }
     .list::-webkit-scrollbar-track { background: var(--bg0); }
     .list::-webkit-scrollbar-thumb { background: var(--bdr); border-radius: 2px; }
 
-    /* ── Card (capsule) ── */
-    .card { display: flex; align-items: center; gap: 10px; padding: 12px 10px; margin-bottom: 6px; background: var(--bg1); position: relative; border: 1px solid var(--bdr); border-radius: var(--r); cursor: pointer; transition: background .1s, border-color .12s; user-select: none; }
-    .card:nth-child(even) { background: var(--bg2); }
-    .card:hover { background: #302F40; border-color: var(--bdr2); }
-    .card:active { background: #434153; }
+    /* ── Card ──
+       3 ティア構成: HP%（主値） > レイド名（識別子） > 人数 / BP / 残り時間（メタ）。
+       内側 3px / 外側 10px の余白比でカードを 1 個のオブジェクトとして読ませる（旧: 5px / 6px）。
+       ゼブラ縞は廃止（parity で面が変わると joined / hover の判別が濁るため）。 */
+    .card {
+      display: flex; align-items: center; gap: 10px; width: 100%;
+      padding: 9px 10px; margin-bottom: 10px;
+      background: var(--bg1); border: 1px solid transparent; border-radius: var(--r);
+      cursor: pointer; text-align: left; color: inherit; font-family: inherit;
+      transition: background .1s ease-out; user-select: none;
+    }
+    .card:hover { background: var(--hov); }
+    .card:active { background: var(--act); }
     .card.joining { opacity: .5; pointer-events: none; }
-    .card.joined { background: rgba(62,181,3,0.1); border-color: var(--grn); }
-    .card-unknown { display: flex; align-items: center; gap: 10px; padding: 12px 10px; margin-bottom: 6px; position: relative; border: 1px solid var(--red); border-radius: var(--r); cursor: not-allowed; user-select: none; background: rgba(255,77,0,0.08); opacity: .75; }
-    .thumb { width: 68px; height: 52px; border-radius: var(--r-sm); object-fit: cover; flex-shrink: 0; background: var(--bg2); pointer-events: none; }
-    .info { flex: 1; min-width: 0; pointer-events: none; }
-    .name { font-size: 14px; font-weight: 600; color: var(--tx0); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 5px; }
-    .meta { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; margin-bottom: 5px; }
-    .mi { display: flex; align-items: center; gap: 3px; font-size: 13px; }
-    .mk { color: var(--tx2); font-size: 11px; } .mv { color: var(--tx1); font-weight: 600; font-size: 14px; }
-    .mv.g { color: var(--grn); } .mv.o { color: var(--org); } .mv.r { color: var(--red); }
-    .hp-bar { height: 4px; background: var(--bdr); border-radius: 4px; overflow: hidden; margin-bottom: 5px; }
-    .hp-fill { height: 100%; border-radius: 4px; }
-    .footer { display: flex; justify-content: flex-start; align-items: center; }
-    .time { font-size: 10px; color: #58a7c0; }
-    .owner { display: none; }
+    .card.joined { background: rgba(62,181,3,0.10); border-color: rgba(62,181,3,.45); }
+    /* 未対応レイド: 赤枠ではなく「面を持たない＋点線」で降格（--red は破壊的操作専用） */
+    .card.card-unknown { background: none; border: 1px dashed var(--bdr); cursor: default; }
+    .card.card-unknown .name { color: var(--tx1); }
+    .card.card-unknown .hp-val, .card.card-unknown .mem { color: var(--tx2); }
+    .thumb { width: 60px; height: 46px; border-radius: var(--r-sm); object-fit: cover; flex-shrink: 0; background: var(--bg2); pointer-events: none; }
+    .info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; pointer-events: none; }
+    .row1 { display: flex; align-items: baseline; gap: 8px; }
+    .name { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; color: var(--tx0); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .time { flex-shrink: 0; font-size: 11px; color: var(--tx2); font-variant-numeric: tabular-nums; }
+    .row2 { display: flex; align-items: center; gap: 8px; }
+    .hp-val { flex-shrink: 0; font-size: 18px; font-weight: 700; line-height: 1; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+    .hp-val.g { color: var(--hp-g); } .hp-val.o { color: var(--hp-o); } .hp-val.r { color: var(--hp-r); }
+    .hp-bar { flex: 1; min-width: 0; height: 3px; background: var(--bg3); border-radius: 3px; overflow: hidden; }
+    .hp-fill { display: block; height: 100%; border-radius: 3px; }
+    .row3 { display: flex; align-items: center; gap: 9px; font-size: 11px; color: var(--tx1); }
+    .mem { font-weight: 600; font-variant-numeric: tabular-nums; }
+    .mem i { font-style: normal; font-weight: 400; color: var(--tx2); }
     .bp-row { display: flex; align-items: center; gap: 3px; }
-    .bp-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bdr2); }
-    .bp-dot.on { background: #4fa3e0; }
-    .bp-half { font-size: 11px; color: var(--org); font-weight: 700; margin-left: 2px; }
+    .bp-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--bg3); }
+    .bp-dot.on { background: var(--bp-dot); }
+    .bp-half { font-size: 11px; color: var(--org); font-weight: 700; }
+    .tag-unknown { margin-left: auto; font-size: 10px; color: var(--tx2); border: 1px solid var(--bdr); border-radius: 4px; padding: 0 5px; line-height: 15px; }
+    .badge-joined { margin-left: auto; font-size: 10px; font-weight: 700; color: var(--grn); }
 
     /* ── Active event banner（マイクエスト (イベント) セクション直前に表示） ── */
     .active-events {
@@ -791,7 +830,7 @@
       color: #fff; cursor: pointer; font-size: 11px; line-height: 1;
       padding: 0;
     }
-    .event-banner-del:hover { background: var(--red, #e05); }
+    .event-banner-del:hover { background: var(--red); }
     /* 開催終了: グレーアウト */
     .event-group-ended .event-banner-img { filter: grayscale(1); opacity: .55; }
 
@@ -827,8 +866,18 @@
       cursor: pointer; transition: border-color .15s, background .1s;
       user-select: none;
     }
-    .host-tile:hover { border-color: var(--acc); background: #302F40; }
-    .host-tile:active { background: #434153; }
+    .host-tile:hover { border-color: var(--acc); background: var(--hov); }
+    .host-tile:active { background: var(--act); }
+    /* タイル全面を覆う透明ボタン。キーボード到達とフォーカスリングを成立させる */
+    .host-tile-open {
+      position: absolute; inset: 0; z-index: 0;
+      background: none; border: none; padding: 0; margin: 0;
+      font: inherit; color: transparent; cursor: pointer;
+    }
+    .host-tile-open:focus-visible { outline: none; }
+    .host-tile.depleted .host-tile-open { display: none; }
+    .host-tile:has(.host-tile-open:focus-visible) { outline: 2px solid var(--acc); outline-offset: 2px; }
+    .host-tile .thumb, .host-tile .thumb-placeholder, .host-tile-info { position: relative; z-index: 1; }
     .host-tile.depleted {
       opacity: 0.45;
       background: rgba(255,255,255,0.03);
@@ -860,7 +909,7 @@
       margin-bottom: 2px; line-height: 1.3;
     }
     .host-tile-meta {
-      font-size: 9px; color: var(--tx1); line-height: 1.3;
+      font-size: 10px; color: var(--tx1); line-height: 1.3;
     }
     .host-count-badge {
       display: inline-flex; align-items: center; gap: 1px;
@@ -871,9 +920,9 @@
     .host-count-badge .hc-max { color: var(--tx2); }
     .host-count-badge.depleted .hc-current { color: var(--red); }
     /* 本日上限解除中: 残り回数ではなく本日の実自発回数を表示していることを示す */
-    .host-count-badge.override .hc-badge-mark { font-size: 9px; font-weight: 400; color: var(--tx2); margin-right: 2px; }
+    .host-count-badge.override .hc-badge-mark { font-size: 10px; font-weight: 400; color: var(--tx2); margin-right: 2px; }
     .host-count-badge.override .hc-current { color: var(--cat-event, var(--acc)); }
-    .host-tile-time { font-size: 8px; color: var(--tx2); }
+    .host-tile-time { font-size: 10px; color: var(--tx2); }
     /* hell skip 回数プルダウン (.host-tile-info は pointer-events:none なので auto で受け直す) */
     .hell-skip-select {
       pointer-events: auto;
@@ -894,8 +943,8 @@
       background: rgba(26,30,36,0.75); border: none; border-radius: var(--r-sm);
       color: var(--tx2); font-size: 12px; line-height: 1;
       cursor: pointer; padding: 2px 4px;
-      opacity: 0; transition: opacity .15s, color .15s;
-      pointer-events: auto; z-index: 1;
+      opacity: 0; transition: opacity .15s ease-out, color .15s ease-out;
+      pointer-events: auto; z-index: 2;
     }
     .host-tile:hover .host-del { opacity: 1; }
     .host-del:hover { color: var(--red); }
@@ -906,7 +955,7 @@
     .state p { font-size: 12px; line-height: 1.7; }
     .loading-state { padding: 20px; text-align: center; color: var(--tx2); font-size: 12px; }
     .spinner { width: 18px; height: 18px; border: 2px solid var(--bdr); border-top-color: var(--acc); border-radius: 50%; animation: spin .7s linear infinite; margin: 0 auto 8px; }
-    .err { padding: 14px 10px; color: #ff8080; font-size: 12px; text-align: center; line-height: 1.7; }
+    .err { padding: 14px 10px; color: var(--red-tx); font-size: 12px; text-align: center; line-height: 1.7; }
 
     /* ── Template name input ── */
     .tpl-name-row { display: none; align-items: center; gap: 5px; padding: 5px 10px; background: var(--bg0); border-bottom: 1px solid var(--acc); flex-shrink: 0; }
@@ -941,7 +990,7 @@
     }
     .help-panel.open { display: block; }
     .help-title { font-size: 11px; color: var(--acc); letter-spacing: .06em; margin-bottom: 8px; font-weight: 600; }
-    .help-list { font-size: 11.5px; line-height: 1.55; color: var(--tx1); }
+    .help-list { font-size: 11px; line-height: 1.55; color: var(--tx1); }
     .help-list dt { color: var(--tx0); font-weight: 600; margin-top: 6px; }
     .help-list dt:first-child { margin-top: 0; }
     .help-list dd { margin: 1px 0 0 0; padding-left: 8px; color: var(--tx1); border-left: 2px solid var(--bdr); }
@@ -975,18 +1024,18 @@
     .collapsible-item summary {
       list-style: none; cursor: pointer;
       padding: 7px 10px; display: flex; align-items: center; gap: 7px;
-      color: var(--tx0); font-weight: 600; font-size: 11.5px;
+      color: var(--tx0); font-weight: 600; font-size: 11px;
       user-select: none; background: var(--bg1);
     }
     .collapsible-item summary::-webkit-details-marker { display: none; }
     .collapsible-item summary::before {
-      content: '▶'; font-size: 8px; color: var(--tx2); flex-shrink: 0;
+      content: '▶'; font-size: 10px; color: var(--tx2); flex-shrink: 0;
       transition: transform .15s;
     }
     .collapsible-item[open] summary::before { transform: rotate(90deg); }
     .collapsible-item .item-body {
       padding: 6px 10px 8px 26px;
-      color: var(--tx1); font-size: 11.5px; line-height: 1.55;
+      color: var(--tx1); font-size: 11px; line-height: 1.55;
     }
     .collapsible-item .item-body strong { color: var(--tx0); font-weight: 700; }
     .collapsible-item .item-body em { font-style: normal; color: var(--org); font-weight: 600; }
@@ -1129,23 +1178,34 @@
 <!-- Dashboard (dashboard only) -->
 <div class="dashboard dashboard-only" id="dashboard"></div>
 
-<!-- Rescue tab header (rescue only) -->
-<div class="rescue-header rescue-only">
-  <span class="rescue-header-title" data-i18n="rescueSectionTitle">救援マルチ</span>
-</div>
-
-<!-- Quick actions -->
-<div class="quick-bar rescue-only">
-  <div class="quick-bar-top">
-    <button class="btn-assist" id="btn-assist" data-i18n="rescueBtnAssist">⚔ 救援依頼一覧</button>
-    <button class="btn-assist" id="btn-assist-unclaimed" data-i18n="rescueBtnUnconf">⚔ 未確認バトル</button>
+<!-- Rescue control zone (rescue only)
+     クイック 2 ボタン + テンプレートチップ + 条件ボタン を 1 ゾーンに集約。
+     HP / 人数 / FP は #cond-panel に格納し、既定は閉（開くとリストを下へ押し出す）。 -->
+<div class="ctl-wrap rescue-only">
+  <div class="ctl">
+    <div class="ctl-quick">
+      <button class="btn-assist" id="btn-assist">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="22,3 2,3 10,12.46 10,19 14,21 14,12.46"/></svg><span data-i18n="rescueBtnAssist">救援依頼一覧</span>
+      </button>
+      <button class="btn-assist" id="btn-assist-unclaimed">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="13"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><span data-i18n="rescueBtnUnconf">未確認バトル</span>
+      </button>
+    </div>
+    <div class="ctl-row">
+      <div class="template-scroll" id="template-scroll"></div>
+      <button class="btn-tpl-add" id="btn-tpl-add" data-i18n="filterSaveBtn">＋保存</button>
+      <button class="cond-btn" id="btn-cond" aria-expanded="false" aria-controls="cond-panel">
+        <span data-i18n="filterCondBtn">条件</span>
+        <span class="cond-summary" id="cond-summary"></span>
+        <svg class="cond-caret" viewBox="0 0 24 24" aria-hidden="true"><polyline points="6,9 12,15 18,9"/></svg>
+      </button>
+    </div>
   </div>
-</div>
 
-<!-- Filters (rescue only) -->
-<div class="filters rescue-only">
-  <div class="filter-grid">
-    <div class="filter-block disabled" id="hp-block">
+  <!-- Condition panel (rescue only) -->
+  <div class="cond-panel" id="cond-panel" hidden>
+    <div class="filter-grid">
+      <div class="filter-block disabled" id="hp-block">
       <input type="checkbox" class="filter-check" id="hp-on">
       <label class="filter-block-title" for="hp-on">HP</label>
       <input type="range" id="hp-val" min="20" max="100" step="10" value="50">
@@ -1165,19 +1225,12 @@
         <button type="button" class="mode-btn" data-mode="below" data-i18n="filterBelow" aria-pressed="true">以下</button>
       </div>
     </div>
+    <div class="filter-block disabled" id="bp-block">
+      <input type="checkbox" class="filter-check" id="bp-on">
+      <label class="filter-block-title" for="bp-on" data-i18n="filterFp">FP 対象限定</label>
+    </div>
+    </div>
   </div>
-</div>
-
-<!-- Template bar (rescue only) -->
-<div class="template-bar rescue-only">
-  <div class="template-scroll" id="template-scroll"></div>
-  <button class="btn-tpl-add" id="btn-tpl-add" data-i18n="filterSaveBtn">＋保存</button>
-</div>
-
-<!-- FP 対象限定 (rescue only) -->
-<div class="bp-row-bar rescue-only" id="bp-block">
-  <input type="checkbox" class="filter-check" id="bp-on">
-  <label class="filter-block-title" for="bp-on" data-i18n="filterFp">FP 対象限定</label>
 </div>
 
 <!-- Template name input (rescue only) -->
@@ -1187,10 +1240,17 @@
   <button class="btn-tpl-cancel" id="btn-tpl-cancel" data-i18n="filterCancel">✕</button>
 </div>
 
-<!-- Sort (rescue only) -->
-<div class="sort-row rescue-only">
-  <label for="sort" data-i18n="sortLabel">並び順</label>
-  <select id="sort">
+<!-- Results bar (rescue only) — 件数 / BP / 更新時刻 / ソート（旧 sort-row を吸収） -->
+<div class="results-bar rescue-only">
+  <div class="count" id="count">— 件</div>
+  <span class="rb-dot" aria-hidden="true"></span>
+  <div class="bp-display" id="bp-display">
+    <span class="bp-display-label" data-i18n="bpLabel">BP:</span>
+    <span class="bp-display-value" id="bp-display-value">--</span>
+  </div>
+  <span class="rb-dot" aria-hidden="true"></span>
+  <div class="updated" id="updated"></div>
+  <select class="sort-mini" id="sort" data-i18n-title="sortLabel" data-i18n-aria-label="sortLabel">
     <option value="default" data-i18n="sortDefault">デフォルト</option>
     <option value="hp-asc" data-i18n="sortHpAsc">HP 低い順</option>
     <option value="hp-desc" data-i18n="sortHpDesc">HP 高い順</option>
@@ -1198,19 +1258,6 @@
     <option value="mem-desc" data-i18n="sortMemDesc">人数 多い順</option>
     <option value="time-asc" data-i18n="sortTimeAsc">残り時間 短い順</option>
   </select>
-</div>
-
-<!-- Results bar (rescue only) -->
-<div class="results-bar rescue-only">
-  <div style="display:flex;align-items:center;gap:6px;">
-    <div class="count" id="count">— 件</div>
-    <span style="color:var(--bdr2)">|</span>
-    <div class="bp-display" id="bp-display">
-      <span class="bp-display-label" data-i18n="bpLabel">BP:</span>
-      <span class="bp-display-value" id="bp-display-value">--</span>
-    </div>
-  </div>
-  <div class="updated" id="updated"></div>
 </div>
 
 <!-- Host history header (host-history only) -->

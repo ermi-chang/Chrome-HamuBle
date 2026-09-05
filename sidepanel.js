@@ -4,6 +4,7 @@ const DEFAULTS = {
   hpOn: false, hpMode: 'above', hpVal: 50,
   memOn: false, memMode: 'below', memVal: 5,
   bpOn: false,
+  condOpen: false,
   sort: 'default',
   iconBarPos: 'left',
   hostHistoryCols: 3,
@@ -148,6 +149,9 @@ const elMemBlock      = document.getElementById('mem-block');
 const elBpOn    = document.getElementById('bp-on');
 const elBpBlock = document.getElementById('bp-block');
 const elSort    = document.getElementById('sort');
+const btnCond      = document.getElementById('btn-cond');
+const elCondPanel  = document.getElementById('cond-panel');
+const elCondSummary = document.getElementById('cond-summary');
 
 const elIconBarPosGroup      = document.getElementById('icon-bar-pos-btns');
 const elHostHistoryColsGroup = document.getElementById('host-history-cols-btns');
@@ -276,6 +280,8 @@ function applySettingsToUI() {
   applyHostHistoryCols();
   applyHostCategoryFilter();
   updateFilterBlockState();
+  setCondPanelOpen(!!settings.condOpen);
+  updateCondUI();
   updateLangPicker(settings.lang || 'zh');
 }
 
@@ -306,6 +312,7 @@ document.getElementById('lang-btns').addEventListener('click', e => {
   settings.lang = lang;
   applyI18n(lang);
   updateLangPicker(lang);
+  updateCondUI();
   saveAll();
   if (activeTab === 'rescue') renderFiltered();
   else refreshHostViews();
@@ -349,6 +356,25 @@ function readSettingsFromUI() {
   settings.showEventBanner = elShowEventBanner.checked;
   settings.hideJoined      = elHideJoined.checked;
   settings.keepDropLogOnRemove = elKeepDropLog.checked;
+}
+
+// ── 条件パネル（HP / 人数 / FP）───────────────────────
+// 現在の条件は畳んでいる間も条件ボタンのラベルに要約表示する。
+function condSummaryText() {
+  const parts = [];
+  if (settings.hpOn)  parts.push(`HP${settings.hpMode === 'above' ? '≥' : '≤'}${settings.hpVal}`);
+  if (settings.memOn) parts.push(`${t('filterMem')}${settings.memMode === 'above' ? '≥' : '≤'}${settings.memVal}`);
+  if (settings.bpOn)  parts.push(t('filterFp'));
+  return parts.length ? parts.join(' · ') : t('filterCondNone');
+}
+function updateCondUI() {
+  if (elCondSummary) elCondSummary.textContent = condSummaryText();
+  if (btnCond) btnCond.classList.toggle('has-cond', !!(settings.hpOn || settings.memOn || settings.bpOn));
+}
+function setCondPanelOpen(open) {
+  settings.condOpen = !!open;
+  if (elCondPanel) elCondPanel.hidden = !settings.condOpen;
+  if (btnCond) btnCond.setAttribute('aria-expanded', settings.condOpen ? 'true' : 'false');
 }
 
 function updateFilterBlockState() {
@@ -1177,7 +1203,8 @@ function renderTemplates() {
   templates.forEach(tpl => {
     const chip = document.createElement('div');
     chip.className = 'tpl-chip' + (tpl.id === activeTplId ? ' active-tpl' : '');
-    chip.innerHTML = `<span class="tpl-chip-name">${esc(tpl.name)}</span><span class="tpl-chip-del" title="${esc(t('templateDeleteTitle'))}">✕</span>`;
+    chip.innerHTML = `<button type="button" class="tpl-chip-name">${esc(tpl.name)}</button>`
+                   + `<button type="button" class="tpl-chip-del" title="${esc(t('templateDeleteTitle'))}" aria-label="${esc(t('templateDeleteTitle'))}">✕</button>`;
     chip.querySelector('.tpl-chip-name').addEventListener('click', () => applyTemplate(tpl));
     chip.querySelector('.tpl-chip-del').addEventListener('click', (e) => { e.stopPropagation(); deleteTemplate(tpl.id); });
     templateScroll.appendChild(chip);
@@ -1225,10 +1252,33 @@ function renderFiltered() {
 
 // ── Render ────────────────────────────────────────────
 function hpCls(p) { return p===null?'': p>=70?'g': p>=30?'o':'r'; }
-function hpCol(p) { return p===null||p>=70?'#3eb503': p>=30?'#ffa826':'#ff4d00'; }
+// HP バーの色は CSS トークン（--hp-*）を唯一の定義元にする
+const rootStyle = getComputedStyle(document.documentElement);
+function cssVar(name, fallback) {
+  const v = (rootStyle.getPropertyValue(name) || '').trim();
+  return v || fallback;
+}
+function hpCol(p) {
+  return (p === null || p >= 70) ? cssVar('--hp-g', '#3eb503')
+       : (p >= 30)               ? cssVar('--hp-o', '#ffa826')
+       :                           cssVar('--hp-r', '#ff6a33');
+}
 function bpHtml(n, half) {
-  let d = ''; for (let i = 0; i < 5; i++) d += `<div class="bp-dot${i<n?' on':''}"></div>`;
-  return `<div class="bp-row">${d}${half?'<span class="bp-half">½</span>':''}</div>`;
+  let d = ''; for (let i = 0; i < 5; i++) d += `<span class="bp-dot${i<n?' on':''}"></span>`;
+  return `<span class="bp-row">${d}</span>${half?'<span class="bp-half">½</span>':''}`;
+}
+// カード本体（サムネ + 3 ティア構成の info）。tail は row3 右端に置く追加要素。
+function cardBodyHTML(r, tail) {
+  const h   = r.hpPercent !== null ? `${r.hpPercent.toFixed(0)}%` : '—';
+  const mem = r.memberCurrent !== null ? `${r.memberCurrent}<i>/${r.memberMax}</i>` : '—';
+  const nm  = esc(r.chapterName.length > 24 ? r.chapterName.slice(0,24)+'…' : r.chapterName);
+  return `
+  <img class="thumb" src="${esc(r.thumbnailSrc)}" alt="" loading="lazy">
+  <span class="info">
+    <span class="row1"><span class="name">${nm}</span><span class="time">${esc(r.remainingTime)}</span></span>
+    <span class="row2"><span class="hp-val ${hpCls(r.hpPercent)}">${h}</span><span class="hp-bar"><span class="hp-fill" style="width:${r.hpPercent??0}%;background:${hpCol(r.hpPercent)}"></span></span></span>
+    <span class="row3"><span class="mem">${mem}</span>${bpHtml(r.bp, r.isHalf)}${tail || ''}</span>
+  </span>`;
 }
 
 function setListHTML(html) {
@@ -1251,49 +1301,21 @@ function render(raids) {
   const sorted  = [...normal, ...unknown];
 
   elList.innerHTML = sorted.map(r => {
-    const h  = r.hpPercent !== null ? `${r.hpPercent.toFixed(0)}%` : '—';
-    const m  = r.memberCurrent !== null ? `${r.memberCurrent}/${r.memberMax}` : '—';
-    const nm = esc(r.chapterName.length > 24 ? r.chapterName.slice(0,24)+'…' : r.chapterName);
     if (r.isUnknown) {
+      // 種別未判定レイド: 赤枠での警告ではなく、点線＋面なしで最下部に降格表示する
+      const tail = `<span class="tag-unknown">${esc(t('raidUnknownTag'))}</span>`;
       return `
-<div class="card card-unknown" title="${esc(t('raidTitleUnknown', { cls: r.unknownClasses.join(',') }))}">
-  <img class="thumb" src="${esc(r.thumbnailSrc)}" alt="" loading="lazy">
-  <div class="info">
-    <div class="name">${nm}</div>
-    <div class="meta">
-      <div class="mi"><span class="mk">HP</span><span class="mv ${hpCls(r.hpPercent)}">${h}</span></div>
-      <div class="mi"><span class="mk">${t('raidMkMem')}</span><span class="mv">${m}</span></div>
-      ${bpHtml(r.bp, r.isHalf)}
-    </div>
-    <div class="hp-bar"><div class="hp-fill" style="width:${r.hpPercent??0}%;background:${hpCol(r.hpPercent)}"></div></div>
-    <div class="footer">
-      <span class="time">⏱ ${esc(r.remainingTime)}</span>
-      <span class="owner">👤 ${esc(r.ownerName)}</span>
-    </div>
-    <div style="font-size:9px;color:#ff4d00;margin-top:2px;">${esc(t('raidUnknownWarn', { cls: r.unknownClasses.join(', ') }))}</div>
-  </div>
+<div class="card card-unknown" title="${esc(t('raidTitleUnknown', { cls: r.unknownClasses.join(',') }))}">${cardBodyHTML(r, tail)}
 </div>`;
     }
+    const joined = isJoinedRaid(r);
+    const tail = joined ? `<span class="badge-joined">${esc(t('raidJoinedBadge'))}</span>` : '';
     return `
-<div class="card${isJoinedRaid(r) ? ' joined' : ''}" data-raid-id="${esc(r.raidId)}" data-raid-url="${esc(r.raidUrl||'')}"
-     data-thumb="${esc(r.thumbnailSrc)}" data-name="${esc(r.chapterName)}" data-bp="${r.bp|0}" title="${esc(t('raidClickJoin'))}">
-  <img class="thumb" src="${esc(r.thumbnailSrc)}" alt="" loading="lazy">
-  <div class="info">
-    <div class="name">${nm}</div>
-    <div class="meta">
-      <div class="mi"><span class="mk">HP</span><span class="mv ${hpCls(r.hpPercent)}">${h}</span></div>
-      <div class="mi"><span class="mk">${t('raidMkMem')}</span><span class="mv">${m}</span></div>
-      ${bpHtml(r.bp, r.isHalf)}
-    </div>
-    <div class="hp-bar"><div class="hp-fill" style="width:${r.hpPercent??0}%;background:${hpCol(r.hpPercent)}"></div></div>
-    <div class="footer">
-      <span class="time">⏱ ${esc(r.remainingTime)}</span>
-      <span class="owner">👤 ${esc(r.ownerName)}</span>
-    </div>
-  </div>
-</div>`;
+<button type="button" class="card${joined ? ' joined' : ''}" data-raid-id="${esc(r.raidId)}" data-raid-url="${esc(r.raidUrl||'')}"
+     data-thumb="${esc(r.thumbnailSrc)}" data-name="${esc(r.chapterName)}" data-bp="${r.bp|0}" title="${esc(t('raidClickJoin'))}">${cardBodyHTML(r, tail)}
+</button>`;
   }).join('');
-  elList.querySelectorAll('.card:not(.card-unknown)').forEach(card => {
+  elList.querySelectorAll('button.card').forEach(card => {
     card.addEventListener('click', () => joinRaid(card, {
       raidId:       card.dataset.raidId,
       raidUrl:      card.dataset.raidUrl,
@@ -2204,6 +2226,7 @@ function renderHostHistory() {
     const cat = entry.raidCategory || 'etc';
     return `
 <div class="host-tile host-cat-${esc(cat)}${tileClass}" data-quest-id="${esc(entry.questId)}" data-quest-type="${esc(entry.questType)}" data-treasure-id="${esc(entry.treasureId)}" data-category="${esc(cat)}">
+  <button type="button" class="host-tile-open" aria-label="${esc(name)}"></button>
   ${thumbHtml}
   <button class="host-del" data-quest-id="${esc(entry.questId)}" title="削除">✕</button>
   <div class="host-tile-info">
@@ -2757,6 +2780,7 @@ function onFilterChange() {
   elMemValDisplay.textContent = elMemVal.value;
   readSettingsFromUI();
   updateFilterBlockState();
+  updateCondUI();
   activeTplId = null;
   renderTemplates();
   saveAll();
@@ -2771,6 +2795,22 @@ function onFilterChange() {
     setModeToggle(toggle, btn.dataset.mode);
     onFilterChange();
   });
+});
+
+// ── 条件パネル開閉 ────────────────────────────────────
+// 開くとリストを下へ押し出す（重ねない）。開閉状態は保存して次回起動へ引き継ぐ。
+if (btnCond) {
+  btnCond.addEventListener('click', () => {
+    setCondPanelOpen(!settings.condOpen);
+    saveAll();
+  });
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && settings.condOpen) {
+    setCondPanelOpen(false);
+    saveAll();
+    btnCond?.focus();
+  }
 });
 
 // ── アイコンバー切替 ──────────────────────────────────
