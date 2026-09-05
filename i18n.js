@@ -228,13 +228,15 @@ const TRANSLATIONS = {
     settingsKeepDropLog:  '移除监视目标时保留掉落记录',
     // Rescue section
     rescueSectionTitle: '救援多人战',
-    rescueBtnAssist:    '⚔ 救援请求列表',
-    rescueBtnUnconf:    '⚔ 未确认战斗',
+    rescueBtnAssist:    '救援请求列表',
+    rescueBtnUnconf:    '未确认战斗',
     // Filters
     filterMem:                 '人数',
     filterAbove:               '以上',
     filterBelow:               '以下',
     filterFp:                  '仅限FP对象',
+    filterCondBtn:             '条件',
+    filterCondNone:            '全部',
     filterSaveBtn:             '＋保存',
     filterSaveBtnConfirm:      '保存',
     filterCancel:              '✕',
@@ -265,6 +267,8 @@ const TRANSLATIONS = {
     raidTitleUnknown: '未知职业（{cls}），无法参加',
     raidUnknownWarn:  '⚠ 未知职业: {cls}',
     raidClickJoin:    '点击参加',
+    raidUnknownTag:   '未对应',
+    raidJoinedBadge:  '已参加',
     // Host history
     hostTitle:             '我的任务',
     hostDelTitle:          '删除',
@@ -342,5 +346,8 @@ function applyI18n(lang) {
   });
   document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
     el.placeholder = t(el.dataset.i18nPlaceholder);
+  });
+  document.querySelectorAll('[data-i18n-aria-label]').forEach(el => {
+    el.setAttribute('aria-label', t(el.dataset.i18nAriaLabel));
   });
 }
