@@ -302,8 +302,9 @@ const TRANSLATIONS = {
     eventBannerDelTitle: '删除',
     // BP warning
     bpWarning: '⚠ BP不足，请在主面板中恢复BP。',
-    // Support hint (info footer)
-    supportHint: '如果您喜欢，欢迎支持 ♡',
+    // Support (トップヘッダーのバー / info タブのフッター)
+    supportBarLabel: '支持开发',
+    supportHint: '如果这个扩展帮到了您，欢迎支持开发。',
     // Version
     versionLabel: 'HamuBle v{v}',
     // Template chip delete
