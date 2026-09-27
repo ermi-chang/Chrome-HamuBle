@@ -21,8 +21,8 @@ const UPDATE_RELEASE_API = 'https://api.github.com/repos/ermi-chang/Chrome-HamuB
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6h
 
 let allRaids    = [];
-// フィルタ経由でクリック参加した raidId の一時ログ。リスト更新（load での再取得）ごとに
-// 全クリアする — 更新後は本体側の ico-enter が参加済みを示すため引き継ぎ不要。
+// フィルタ経由でクリック参加した raidId の一時ログ。クリック直後〜ページ遷移までの
+// 即時非表示にのみ使い、救援リストを再取得したら全クリアする（本体側の ico-enter で判定）。
 const JOINED_LOG_MAX = 10;
 const joinedRaidIds = new Set();
 let isLoading   = false;
@@ -708,16 +708,12 @@ async function load(silent = false) {
     const res = await askContent(tab.id, { type: 'GET_RAIDS' });
     if (!res) throw new Error(t('msgNoResponse'));
     allRaids = res.raids || [];
-    // クリック参加ログの整理: 新リストに存在しない raidId のみ解放する。
-    // RAID_LIST_UPDATED はゲージ変動等の細かい DOM 変化でも発火するため全クリアは不可。
-    // 本当のリスト更新では全件入れ替わって自然に空になり、以降は ico-enter 側で判定される。
+    // クリック参加ログの整理: 救援リストを取得できたら全クリアする。
+    // 実際に参戦したレイドは本体側が ico-enter を付けるので、そちら（hasEnterIcon）で判定する。
+    // 「リストに残っている raidId は保持」にすると、クリック後に参加へ至らず（満員・BP不足・戻る）
+    // 救援表へ戻ったときに同じレイドが参加済み扱いのまま隠れ続けてしまう。
     // 空リストは遷移中の一時状態の可能性があるためログに触らない。
-    if (allRaids.length > 0) {
-      const liveIds = new Set(allRaids.map(r => r.raidId));
-      for (const id of [...joinedRaidIds]) {
-        if (!liveIds.has(id)) joinedRaidIds.delete(id);
-      }
-    }
+    if (allRaids.length > 0) joinedRaidIds.clear();
     // currentBp は救援タブ DOM 上にしか存在しないため、null の場合は前値を保持
     if (typeof res.currentBp === 'number') {
       currentBP = res.currentBp;
