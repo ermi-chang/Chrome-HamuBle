@@ -279,6 +279,7 @@ const TRANSLATIONS = {
     hostRemainingPost:     ' 次',
     hostTodayCountSuffix:  '次',
     hostHellSkipOptSuffix: '次',
+    hostBulkProName:       '批量Pro',
     hostOverrideTitle:     '解除今日的自发次数上限（灰色任务）。活动或月卡增加次数时使用',
     hostOverrideBadge:     '已解除',
     hostToolHideDepleted:  '隐藏已完成',

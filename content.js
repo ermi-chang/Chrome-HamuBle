@@ -49,6 +49,13 @@
   // hell skip 確定 URL: #quest/supporter/str_params/...is_event_hell_skip=1
   // skip ON で hell ボタン → OK 押下時にこの URL に直遷移し、btn-usual-ok の中間ステップが無い
   const HELL_SKIP_RE = /^#quest\/supporter\/str_params\//;
+  // まとめてPro: #quest/supporter/str_params/quest_id=…&quest_type=…&is_bulk_pro=1
+  // HELL_SKIP_RE と同じ str_params 形式だが Hell ではなく通常自発（PRO）として扱う
+  const BULK_PRO_RE = /^#quest\/supporter\/str_params\/(?:.*&)?is_bulk_pro=1(?:&|$)/;
+  // 通常 PRO クエストと questId が衝突しないよう合成 ID で識別する
+  function makeBulkProQuestId(questIdNumeric) {
+    return `bulkpro_${questIdNumeric}`;
+  }
   const PENDING_HOST_TTL = 120_000; // 120秒で自動失効
 
   // ── バトルリザルト画面 検出用 ──────────────────────────
@@ -379,6 +386,7 @@
       maxLimitedCount: pendingHost.maxLimitedCount,
       raidCategory: pendingHost.raidCategory || 'etc',
       isProQuest:   !!pendingHost.isProQuest,
+      bulkProParams: pendingHost.bulkProParams || null,
       isRetry:      !!pendingHost.isRetry,
       proQuestSkip: pendingHost.proQuestSkip ?? null,
       eventPeriodEndMs: pendingHost.eventPeriodEndMs ?? null,
@@ -386,6 +394,33 @@
       hostThumbnailSrc: pendingHost.hostThumbnailSrc || '',
     });
     pendingHost = null;
+  }
+
+  // まとめてPro URL から pendingHost を組み立てる。
+  // 直前のクリック由来 pendingHost が同一クエストなら名前・サムネイルを引き継ぐ。
+  function buildBulkProPendingHost(hash, prev) {
+    const params = parseHellSkipUrl(hash);
+    if (!params || !params.quest_id) return null;
+    const questId = makeBulkProQuestId(params.quest_id);
+    const carry = prev && (String(prev.questId) === String(params.quest_id)
+      || String(prev.questId) === questId) ? prev : null;
+    return {
+      source:       'bulkPro',
+      ts:           Date.now(),
+      questId,
+      questType:    params.quest_type || '',
+      treasureId:   '',
+      chapterName:  carry?.chapterName || '',
+      raidCategory: 'pro',
+      isProQuest:   true,
+      // 1日1回のため自発前の残り回数は 1 として送る（sidepanel で max=1 / 残り 0 に確定）
+      proQuestSkip: 1,
+      hostThumbnailSrc: carry?.hostThumbnailSrc || '',
+      bulkProParams: {
+        questIdNumeric: params.quest_id,
+        questType:      params.quest_type || '',
+      },
+    };
   }
 
   function parseDatasetInt(el, keys, fallback = null) {
@@ -1361,8 +1396,8 @@
       console.log('[hamuble:hell] supporter ok → okClickedAt set', { eventType: e.type, questId: pendingHellHost.questId });
       return;
     }
-    // str_params URL は Hell 専用なので、pendingHellHost が無ければ通常経路に流さない
-    if (onHellSkip) return;
+    // str_params URL は Hell 専用なので、pendingHellHost が無ければ通常経路に流さない（まとめてPro は例外）
+    if (onHellSkip && !BULK_PRO_RE.test(hash)) return;
     if (!isPendingHostValid()) return;
     if (src) pendingHost.hostThumbnailSrc = src;
     pendingHost.okClickedAt = Date.now();
@@ -1385,6 +1420,8 @@
     const hash = location.hash || '';
     if (hash.indexOf('#quest/fate') === 0) return;
     if (hash.indexOf('#coopraid') === 0)   return;
+    // まとめてPro のサポート石画面では URL 由来の保留を真値とし、画面内クリックで上書きしない
+    if (pendingHost?.source === 'bulkPro' && BULK_PRO_RE.test(hash)) return;
     const el = e.target.closest(
       '[data-quest-id][data-quest-name], [data-quest-id][data-chapter-name]'
     );
@@ -1623,11 +1660,15 @@
       // Hell 保留中は通常 pendingHost の hash 由来セットアップを抑止。
       // (skip popup OK → #quest/supporter 遷移時に source:'hash' pendingHost が
       //  暴発し SELF_HOST_DETECTED と二重発火するのを防ぐ)
-    } else if (pendingHost?.okClickedAt && !hostMatch
-        && (Date.now() - pendingHost.okClickedAt) < 1000) {
+    } else if (pendingHost?.okClickedAt && !hostMatch && !BULK_PRO_RE.test(hash)
+        && (Date.now() - pendingHost.okClickedAt) < (pendingHost.bulkProParams ? 5000 : 1000)) {
       // OK済み + supporter ページから離脱 + OKクリック直後の自動遷移 → 自発確定
       // 確定OKはゲームが即座にページ遷移するが、戻るボタンは人間操作で遅延がある
+      // （まとめてPro は一括実行で遷移が遅れる可能性があるため窓を広げる）
       fireSelfHostDetected();
+    } else if (BULK_PRO_RE.test(hash)) {
+      // まとめてPro のサポート石選択画面: URL から quest_id/quest_type を採取して保留
+      pendingHost = buildBulkProPendingHost(hash, pendingHost);
     } else if (pendingHost?.source === 'click') {
       if (hostMatch && String(pendingHost.questId) !== String(hostMatch[1])) {
         // 別クエストのサポート石選択画面へ遷移した = 元のクリックは中断された。
@@ -1725,7 +1766,9 @@
   // hostHistory に無い questId はサイドパネル側で無視されるため誤登録は起きない。
   {
     const bootHostMatch = (location.hash || '').match(SELF_HOST_RE);
-    if (bootHostMatch) {
+    if (BULK_PRO_RE.test(location.hash || '')) {
+      pendingHost = buildBulkProPendingHost(location.hash, null);
+    } else if (bootHostMatch) {
       pendingHost = {
         source:     'hash',
         ts:         Date.now(),

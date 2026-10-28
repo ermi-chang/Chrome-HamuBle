@@ -763,6 +763,13 @@ chrome.runtime.onMessage.addListener((message) => {
       return;
     }
 
+    // まとめてPro: 既存エントリに上限が無ければ減算前に補う
+    if (existing && message.bulkProParams?.questIdNumeric) {
+      if (!questMeta[message.questId]) questMeta[message.questId] = {};
+      questMeta[message.questId].bulkProParams = message.bulkProParams;
+      normalizeBulkProMeta(questMeta[message.questId], existing.todayCount || 0);
+    }
+
     // マイクエスト経由 または 戻る起点の再受注: 難易度・questMeta 分類は触らず、本日回数と残り自発回数だけ更新
     if ((fromMyQuest || fromBackNav) && existing) {
       existing.todayCount    = (existing.todayCount || 0) + 1;
@@ -829,6 +836,10 @@ chrome.runtime.onMessage.addListener((message) => {
     }
     if (message.hostThumbnailSrc) {
       questMeta[message.questId].hostThumbnailSrc = message.hostThumbnailSrc;
+    }
+    // まとめてPro: 再遷移用に固定 URL のパラメータを保持
+    if (message.bulkProParams?.questIdNumeric) {
+      questMeta[message.questId].bulkProParams = message.bulkProParams;
     }
     if (typeof message.limitedCount === 'number' && Number.isFinite(message.limitedCount)) {
       // data-limited_count は参加前の残り回数なので、参加後表示用に 1 減算する
@@ -1748,6 +1759,10 @@ async function loadHostHistory() {
       hostHistory     = migrateHostHistoryIfNeeded(data.gbfRfHostHistory || []);
       questMeta       = data.gbfRfQuestMeta       || {};
       hostHistoryDate = data.gbfRfHostHistoryDate  || '';
+      // 上限未設定のまま登録済みのまとめてPro エントリを 1日1回へ補正
+      for (const r of hostHistory) {
+        normalizeBulkProMeta(questMeta[r.questId], r.todayCount || 0);
+      }
       activeEvents    = (data.gbfRfActiveEvents && typeof data.gbfRfActiveEvents === 'object') ? data.gbfRfActiveEvents : {};
       eventBanners    = (data.gbfRfEventBanners && typeof data.gbfRfEventBanners === 'object') ? data.gbfRfEventBanners : {};
       // 後方互換: 旧形式（isTeaser フィールド未保存）の救済。eventName が teaser:NNN なら teaser として扱う。
@@ -1981,6 +1996,17 @@ function resolveCat(rec) {
 // （マイクエスト経由で自発するとクエスト一覧ページを開かないため）。
 // そのため baseMax（DOM 真値）に対し、前日の実績から学習した learnedMax を
 // 上乗せした値を「実効 MAX」として表示・depleted 判定・日付リセットで共用する。
+// まとめてPro は 1日1回。DOM から上限を取得できないため固定値を補う。
+// usedToday は補正時点の本日自発回数（残り回数が未設定の場合の算出に使う）。
+const BULK_PRO_DAILY_MAX = 1;
+function normalizeBulkProMeta(meta, usedToday) {
+  if (!meta?.bulkProParams) return;
+  if (!Number.isFinite(meta.maxProQuestSkip)) meta.maxProQuestSkip = BULK_PRO_DAILY_MAX;
+  if (!Number.isFinite(meta.proQuestSkip)) {
+    meta.proQuestSkip = Math.max(0, effectiveMax(meta, true) - (usedToday || 0));
+  }
+}
+
 function effectiveMax(meta, isPro) {
   const base    = isPro ? meta?.maxProQuestSkip : meta?.maxLimitedCount;
   const learned = meta?.learnedMax;
@@ -2161,7 +2187,8 @@ function renderHostHistory() {
 
   const renderTile = (entry) => {
     const meta     = entry.meta;
-    const name     = meta?.chapterName || `Quest ${entry.questId}`;
+    const name     = meta?.chapterName
+      || (meta?.bulkProParams ? t('hostBulkProName') : `Quest ${entry.questId}`);
     const isPro    = entry.raidCategory === 'pro';
     const max      = meta?.isHellQuest ? meta?.maxLimitedCount : effectiveMax(meta, isPro);
     const remaining = isPro ? meta?.proQuestSkip    : meta?.limitedCount;
@@ -2749,7 +2776,10 @@ async function hostHellQuest(questId, skipCount) {
 async function hostQuest(card, entry) {
   if (card.classList.contains('depleted')) return;
   const hasTreasureId = !!entry.treasureId && entry.treasureId !== 'false';
-  const url = hasTreasureId
+  const bulkPro = questMeta[entry.questId]?.bulkProParams;
+  const url = bulkPro
+    ? `https://game.granbluefantasy.jp/#quest/supporter/str_params/quest_id=${bulkPro.questIdNumeric}&quest_type=${bulkPro.questType}&is_bulk_pro=1`
+    : hasTreasureId
     ? `https://game.granbluefantasy.jp/#quest/supporter/${entry.questId}/${entry.questType}/0/${entry.treasureId}`
     : `https://game.granbluefantasy.jp/#quest/supporter/${entry.questId}/${entry.questType}`;
   const tab = await getGBFTab();
