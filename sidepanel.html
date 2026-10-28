@@ -246,6 +246,21 @@
       background: var(--bg2); border: 1px solid var(--bdr);
       font-size: 11px;
     }
+    /* 今日自発チップの輪郭線はマイクエストと同じ分類色 */
+    .dash-sum-chip.host-cat-free  { border-color: var(--cat-free); }
+    .dash-sum-chip.host-cat-nm    { border-color: var(--cat-nm); }
+    .dash-sum-chip.host-cat-hl    { border-color: var(--cat-hl); }
+    .dash-sum-chip.host-cat-ul    { border-color: var(--cat-ul); }
+    .dash-sum-chip.host-cat-event { border-color: var(--cat-event); }
+    .dash-sum-chip.host-cat-pro   { border-color: var(--cat-pro); }
+    .dash-sum-chip.host-cat-etc   { border-color: var(--cat-etc); }
+    /* QUICK PRO（まとめてPro）は虹色の輪郭線（背景を padding-box、グラデを border-box に敷く） */
+    .dash-sum-chip.host-cat-quickpro {
+      border-color: transparent;
+      background:
+        linear-gradient(var(--bg2), var(--bg2)) padding-box,
+        linear-gradient(90deg, #ff5f6d, #ffb347, #f9f871, #6ee7a8, #5fc3ff, #8b7bff, #e07bff) border-box;
+    }
     .dash-sum-cat { color: var(--tx1); }
     .dash-sum-n { font-weight: 700; color: var(--tx0); }
     .dash-sum-empty { font-size: 11px; color: var(--tx2); }
@@ -535,12 +550,17 @@
     .settings-panel { display: none; background: var(--bg0); border-bottom: 2px solid var(--acc); padding: 10px; flex-shrink: 0; }
     .settings-panel.open { display: block; }
     .settings-title { font-size: 11px; color: var(--acc); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 8px; }
-    .setting-row { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
-    .setting-row:last-child { margin-bottom: 0; }
-    .setting-lbl { font-size: 12px; color: var(--tx1); flex-shrink: 0; width: 70px; }
+    /* 設定行: ラベルは 1 行（溢れたら省略）で残り幅を占め、操作部（ピル / チェックボックス）は右端に揃える。
+       行同士は区切り線で分け、ドロップ監視ブロックの上線と同じ線で統一する */
+    .setting-row { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 4px 2px; border-top: 1px solid var(--bdr); }
+    .setting-lbl { font-size: 12px; color: var(--tx1); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .setting-row select { flex: 1; background: var(--bg2); border: 1px solid var(--bdr2); color: var(--tx0); border-radius: 4px; padding: 4px 6px; font-size: 12px; cursor: pointer; }
-    .setting-row .pill-group { flex: 1; }
+    .setting-row .pill-group { flex-shrink: 0; }
     .setting-row input[type="range"] { flex: 1; accent-color: var(--acc); cursor: pointer; }
+    /* チェックボックス行は行全体クリックで切替 */
+    .setting-check { cursor: pointer; }
+    .setting-check input[type="checkbox"] { flex-shrink: 0; margin: 0; accent-color: var(--acc); cursor: pointer; }
+    .setting-version { justify-content: flex-end; min-height: 0; padding-top: 6px; border-top: none; }
     .setting-val { font-size: 12px; color: var(--acc); font-weight: 600; width: 32px; text-align: right; flex-shrink: 0; }
 
     /* ── Pill group (language picker etc.) ── */
@@ -1181,18 +1201,22 @@
       <button class="pill"        data-value="6">6</button>
     </div>
   </div>
-  <div class="setting-row">
+  <label class="setting-row setting-check">
     <span class="setting-lbl" data-i18n="settingsShowEventBanner">イベントバナー</span>
     <input type="checkbox" id="show-event-banner">
-  </div>
-  <div class="setting-row">
+  </label>
+  <label class="setting-row setting-check">
     <span class="setting-lbl" data-i18n="settingsHideJoined">参加済みマルチを非表示</span>
     <input type="checkbox" id="hide-joined">
-  </div>
-  <div class="setting-row">
+  </label>
+  <label class="setting-row setting-check">
     <span class="setting-lbl" data-i18n="settingsKeepDropLog">移除监视目标时保留掉落记录</span>
     <input type="checkbox" id="keep-drop-log">
-  </div>
+  </label>
+  <label class="setting-row setting-check">
+    <span class="setting-lbl" data-i18n="settingsBulkProClearsPro">批量Pro时将其他PRO视为已完成</span>
+    <input type="checkbox" id="bulk-pro-clears-pro">
+  </label>
   <div class="setting-block setting-drop-watch">
     <div class="setting-block-head">
       <span class="setting-lbl" data-i18n="settingsDropWatchTitle">掉落监视</span>
@@ -1205,7 +1229,7 @@
       <div class="drop-watch-input-error" id="drop-watch-input-error"></div>
     </div>
   </div>
-  <div class="setting-row" style="margin-top:4px; justify-content:flex-end;">
+  <div class="setting-row setting-version">
     <span id="version-label" style="font-size:10px; color:var(--tx2); letter-spacing:.04em;">HamuBle</span>
   </div>
 </div>

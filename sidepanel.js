@@ -13,6 +13,7 @@ const DEFAULTS = {
   showEventBanner: true,
   hideJoined: false,
   keepDropLogOnRemove: false,
+  bulkProClearsPro: false,
   lang: 'zh',
 };
 
@@ -161,6 +162,7 @@ const btnDepletedOverride = document.getElementById('btn-depleted-override');
 const elShowEventBanner = document.getElementById('show-event-banner');
 const elHideJoined      = document.getElementById('hide-joined');
 const elKeepDropLog     = document.getElementById('keep-drop-log');
+const elBulkProClears   = document.getElementById('bulk-pro-clears-pro');
 const elIconBar   = document.getElementById('icon-bar');
 const elDashboard = document.getElementById('dashboard');
 // カレンダースクショ生成中フラグ（連打防止。再描画でボタンが差し替わっても効く）
@@ -276,6 +278,7 @@ function applySettingsToUI() {
   elShowEventBanner.checked  = !!settings.showEventBanner;
   elHideJoined.checked       = !!settings.hideJoined;
   elKeepDropLog.checked      = !!settings.keepDropLogOnRemove;
+  elBulkProClears.checked    = !!settings.bulkProClearsPro;
   applyIconBarPos();
   applyHostHistoryCols();
   applyHostCategoryFilter();
@@ -356,6 +359,7 @@ function readSettingsFromUI() {
   settings.showEventBanner = elShowEventBanner.checked;
   settings.hideJoined      = elHideJoined.checked;
   settings.keepDropLogOnRemove = elKeepDropLog.checked;
+  settings.bulkProClearsPro    = elBulkProClears.checked;
 }
 
 // ── 条件パネル（HP / 人数 / FP）───────────────────────
@@ -768,6 +772,10 @@ chrome.runtime.onMessage.addListener((message) => {
       if (!questMeta[message.questId]) questMeta[message.questId] = {};
       questMeta[message.questId].bulkProParams = message.bulkProParams;
       normalizeBulkProMeta(questMeta[message.questId], existing.todayCount || 0);
+    }
+    // まとめてPro は PRO 各クエストを一括実行するため、設定 ON なら他の PRO も本日分を完了扱いにする
+    if (message.bulkProParams?.questIdNumeric && settings.bulkProClearsPro) {
+      clearOtherProQuests(message.questId, now);
     }
 
     // マイクエスト経由 または 戻る起点の再受注: 難易度・questMeta 分類は触らず、本日回数と残り自発回数だけ更新
@@ -2007,6 +2015,20 @@ function normalizeBulkProMeta(meta, usedToday) {
   }
 }
 
+// まとめてPro 実行時に、マイクエスト内の他の PRO クエストの残り回数を 0 にする（設定 bulkProClearsPro）。
+// 上限が未取得のエントリは depleted 判定できないため対象外。本日回数は実自発ではないので増やさない。
+function clearOtherProQuests(bulkQuestId, now) {
+  for (const rec of hostHistory) {
+    if (String(rec.questId) === String(bulkQuestId)) continue;
+    if (resolveCat(rec) !== 'pro') continue;
+    const qm = questMeta[rec.questId];
+    if (!qm || qm.bulkProParams) continue;
+    if (!Number.isFinite(effectiveMax(qm, true))) continue;
+    qm.proQuestSkip = 0;
+    recentHostDecrementAt[rec.questId] = now;
+  }
+}
+
 function effectiveMax(meta, isPro) {
   const base    = isPro ? meta?.maxProQuestSkip : meta?.maxLimitedCount;
   const learned = meta?.learnedMax;
@@ -2340,14 +2362,19 @@ function buildHostSummaryHTML() {
   const counts = {};
   let total = 0;
   for (const rec of hostHistory) {
-    const cat = resolveCat(rec);
+    // まとめてPro は PRO と分けて「QUICK PRO」チップに集計する
+    const cat = questMeta[rec.questId]?.bulkProParams ? 'quickpro' : resolveCat(rec);
     const c   = rec.todayCount || 0;
     counts[cat] = (counts[cat] || 0) + c;
     total += c;
   }
-  const chips = CAT_ORDER
+  const sumOrder = CAT_ORDER.flatMap(cat => cat === 'pro' ? ['pro', 'quickpro'] : [cat]);
+  const chips = sumOrder
     .filter(cat => (counts[cat] || 0) > 0)
-    .map(cat => `<span class="dash-sum-chip host-cat-${esc(cat)}"><span class="dash-sum-cat">${esc(catLabel(cat))}</span><span class="dash-sum-n">${counts[cat]}</span></span>`)
+    .map(cat => {
+      const label = cat === 'quickpro' ? 'QUICK PRO' : catLabel(cat);
+      return `<span class="dash-sum-chip host-cat-${esc(cat)}"><span class="dash-sum-cat">${esc(label)}</span><span class="dash-sum-n">${counts[cat]}</span></span>`;
+    })
     .join('');
   return `
     <div class="dash-section dash-summary">
@@ -2930,6 +2957,12 @@ elHideJoined.addEventListener('change', () => {
 
 // ログ保持設定は今後の削除操作にのみ効くため再描画不要
 elKeepDropLog.addEventListener('change', () => {
+  readSettingsFromUI();
+  saveAll();
+});
+
+// まとめてPro 連動は次回のまとめてPro 検出時にのみ効くため再描画不要
+elBulkProClears.addEventListener('change', () => {
   readSettingsFromUI();
   saveAll();
 });

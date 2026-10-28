@@ -280,18 +280,19 @@ const TRANSLATIONS = {
     hostTodayCountSuffix:  '次',
     hostHellSkipOptSuffix: '次',
     hostBulkProName:       '批量Pro',
+    settingsBulkProClearsPro: '批量Pro时将其他PRO视为已完成',
     hostOverrideTitle:     '解除今日的自发次数上限（灰色任务）。活动或月卡增加次数时使用',
     hostOverrideBadge:     '已解除',
     hostToolHideDepleted:  '隐藏已完成',
     hostToolOverride:      '解除上限',
     hostToolClear:         '清空',
     // Category chip labels
-    catEvent: '活动',
-    catFree:  '自由',
+    catEvent: 'EVENT',
+    catFree:  'FREE',
     catOther: '其他',
     // Category group headers
-    catLabelEvent: '活动',
-    catLabelFree:  '自由',
+    catLabelEvent: 'EVENT',
+    catLabelFree:  'FREE',
     catLabelOther: '其他',
     // Event banner section headers (开催予告 / 开催中 / 开催终了)
     eventGroupTeaser: '活动预告',
